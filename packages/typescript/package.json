@@ -1,0 +1,43 @@
+{
+  "name": "@llm-jury/core",
+  "version": "0.1.0",
+  "description": "TypeScript package for confidence-driven escalation with expert jury debate",
+  "license": "MIT",
+  "author": "Mohammed Khalid (https://github.com/mokhld)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mokhld/llm-jury.git",
+    "directory": "packages/typescript"
+  },
+  "homepage": "https://github.com/mokhld/llm-jury",
+  "bugs": {
+    "url": "https://github.com/mokhld/llm-jury/issues"
+  },
+  "keywords": ["llm", "classification", "confidence", "debate", "jury", "escalation", "middleware"],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "llm-jury": "./dist/cli/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "test": "node --test --experimental-strip-types tests/**/*.test.ts",
+    "check": "npm run build"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.8.2"
+  }
+}
