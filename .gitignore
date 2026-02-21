@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.venv-*/
+venv/
+.pytest_cache/
+*.egg-info/
+build/
+*.egg
+.eggs/
+sdist/
+wheels/
+*.whl
+
+# Hypothesis (property-based testing)
+.hypothesis/
+
+# Node/TypeScript
+node_modules/
+dist/
+*.log
+*.tsbuildinfo
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+*.lcov
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Content / marketing drafts
+.content/
+
+# Test artifacts
+.test-artifacts/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*

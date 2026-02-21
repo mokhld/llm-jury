@@ -1,0 +1,13 @@
+{
+  "name": "llm-jury-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/typescript"
+  ],
+  "scripts": {
+    "test:python": "cd packages/python && python3 -m pytest tests/ -v",
+    "test:typescript": "cd packages/typescript && npm test",
+    "test": "npm run test:python && npm run test:typescript"
+  }
+}
