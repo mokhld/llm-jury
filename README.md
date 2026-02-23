@@ -1,6 +1,12 @@
 # llm-jury
 
-When your classifier is uncertain, let a configurable jury of LLM personas debate and return an auditable verdict.
+**When your classifier is uncertain, let a configurable jury of LLM personas debate and return an auditable verdict.**
+
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Node.js 22.6+](https://img.shields.io/badge/node.js-22.6%2B-green.svg)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python Tests](https://img.shields.io/badge/python_tests-55%20passed-brightgreen.svg)]()
+[![TypeScript Tests](https://img.shields.io/badge/ts_tests-38%20passed-brightgreen.svg)]()
 
 ## Overview
 
