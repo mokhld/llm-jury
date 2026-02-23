@@ -2,7 +2,7 @@
 
 **When your classifier is uncertain, let a configurable jury of LLM personas debate and return an auditable verdict.**
 
-[![PyPI](https://img.shields.io/pypi/v/llm-jury)](https://pypi.org/project/llm-jury/)
+[![PyPI](https://img.shields.io/pypi/v/llm-jury-classifier)](https://pypi.org/project/llm-jury-classifier/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../../LICENSE)
 
@@ -29,15 +29,15 @@ It wraps a classifier returning `(label, confidence)` and adds confidence-based 
 ## Install
 
 ```bash
-pip install llm-jury
+pip install llm-jury-classifier
 ```
 
 Optional extras:
 
 ```bash
-pip install "llm-jury[sklearn]"
-pip install "llm-jury[huggingface]"
-pip install "llm-jury[all]"
+pip install "llm-jury-classifier[sklearn]"
+pip install "llm-jury-classifier[huggingface]"
+pip install "llm-jury-classifier[all]"
 ```
 
 ## Prerequisites

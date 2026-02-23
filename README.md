@@ -36,15 +36,15 @@ This package generalizes that pattern into a domain-agnostic SDK with pluggable 
 ### Python
 
 ```bash
-pip install llm-jury
+pip install llm-jury-classifier
 ```
 
 Optional extras:
 
 ```bash
-pip install "llm-jury[sklearn]"
-pip install "llm-jury[huggingface]"
-pip install "llm-jury[all]"
+pip install "llm-jury-classifier[sklearn]"
+pip install "llm-jury-classifier[huggingface]"
+pip install "llm-jury-classifier[all]"
 ```
 
 ### TypeScript
@@ -635,26 +635,6 @@ npm test
 ```bash
 npm test
 ```
-
-## Releasing
-
-Releases are fully automated via a single **Actions → Run workflow** dispatch.
-
-Go to **Actions → Release → Run workflow** and fill in:
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `version` | Semver without `v` prefix (e.g. `0.2.0`) | *(required)* |
-| `target` | `all`, `pypi`, or `npm` | `all` |
-| `dry_run` | Bump + tag + test only, skip publish | `false` |
-
-The workflow will: bump all three version files → commit → tag `v{version}` → push → run tests → build → publish → create a GitHub Release with auto-generated notes.
-
-### Prerequisites
-
-- GitHub environments: `pypi`, `npm`
-- PyPI trusted publishing configured for this repository/workflow
-- `NPM_TOKEN` secret in the `npm` environment
 
 ## CLI (Secondary)
 
