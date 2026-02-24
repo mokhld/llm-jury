@@ -638,29 +638,23 @@ npm test
 
 ## Releasing
 
-Release automation is defined in `.github/workflows/release.yml`.
+Releases are fully automated via a single **Actions → Run workflow** dispatch.
 
-Trigger modes:
+Go to **Actions → Release → Run workflow** and fill in:
 
-- `release.published`: publishes to PyPI and npm
-- `workflow_dispatch`: lets you pick `python_repository` (`none`, `testpypi`, `pypi`) and whether to `publish_npm`
+| Input | Description | Default |
+|-------|-------------|---------|
+| `version` | Semver without `v` prefix (e.g. `0.2.0`) | *(required)* |
+| `target` | `all`, `pypi`, or `npm` | `all` |
+| `dry_run` | Bump + tag + test only, skip publish | `false` |
 
-Requirements:
+The workflow will: bump all three version files → commit → tag `v{version}` → push → run tests → build → publish → create a GitHub Release with auto-generated notes.
 
-- Create GitHub environments: `testpypi`, `pypi`, `npm`
-- Configure PyPI and TestPyPI trusted publishing for this repository/workflow
-- Add `NPM_TOKEN` secret in environment `npm` (or repo secrets)
-- Tag format must be `vX.Y.Z` and must match:
-  - `packages/python/pyproject.toml` version
-  - `packages/typescript/package.json` version
+### Prerequisites
 
-Typical flow:
-
-1. Bump both package versions to the same value (for example `0.1.1`).
-2. Create and push tag `v0.1.1`.
-3. Publish:
-   - GitHub Release `published` for production publish
-   - `workflow_dispatch` for TestPyPI dry runs and selective publish targets
+- GitHub environments: `pypi`, `npm`
+- PyPI trusted publishing configured for this repository/workflow
+- `NPM_TOKEN` secret in the `npm` environment
 
 ## CLI (Secondary)
 

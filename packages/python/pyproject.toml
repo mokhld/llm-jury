@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-jury"
-version = "0.1.0"
+version = "0.1.1"
 description = "Confidence-driven escalation middleware for classifier edge cases"
 readme = "README.md"
 requires-python = ">=3.10"

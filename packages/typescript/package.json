@@ -1,6 +1,6 @@
 {
   "name": "@llm-jury/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript package for confidence-driven escalation with expert jury debate",
   "license": "MIT",
   "author": "Mohammed Khalid (https://github.com/mokhld)",
@@ -13,7 +13,15 @@
   "bugs": {
     "url": "https://github.com/mokhld/llm-jury/issues"
   },
-  "keywords": ["llm", "classification", "confidence", "debate", "jury", "escalation", "middleware"],
+  "keywords": [
+    "llm",
+    "classification",
+    "confidence",
+    "debate",
+    "jury",
+    "escalation",
+    "middleware"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

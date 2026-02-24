@@ -1,107 +1,157 @@
 name: Release
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
-      python_repository:
-        description: "Python publish target"
+      version:
+        description: "Version to release (e.g. 0.2.0)"
         required: true
-        default: "none"
+        type: string
+      target:
+        description: "What to publish"
+        required: true
+        default: "all"
         type: choice
         options:
-          - none
-          - testpypi
+          - all
           - pypi
-      publish_npm:
-        description: "Publish @llm-jury/core to npm"
+          - npm
+      dry_run:
+        description: "Dry run — bump, tag, and test only (skip publish)"
         required: true
         default: false
         type: boolean
-      tag:
-        description: "Git tag to publish (example: v0.1.0)"
-        required: true
-        type: string
-
-permissions:
-  contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Validate release metadata
+  bump-and-tag:
+    name: Bump versions and tag
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.meta.outputs.tag }}
-      version: ${{ steps.meta.outputs.version }}
-      ref: ${{ steps.meta.outputs.ref }}
+    permissions:
+      contents: write
     steps:
-      - name: Resolve tag and version
-        id: meta
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            tag="${{ github.ref_name }}"
-          else
-            tag="${{ inputs.tag }}"
-          fi
-
-          if [[ -z "$tag" || "$tag" != v* ]]; then
-            echo "Tag must start with 'v' (example: v0.1.0)."
-            exit 1
-          fi
-
-          version="${tag#v}"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout tag
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
-          ref: ${{ steps.meta.outputs.ref }}
+          token: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: Validate package versions match tag
+      - name: Bump versions
         env:
-          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          # packages/python/pyproject.toml
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" packages/python/pyproject.toml
+
+          # packages/typescript/package.json
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.version = $v' packages/typescript/package.json > "$tmp" && mv "$tmp" packages/typescript/package.json
+
+      - name: Validate all versions match
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           python3 - <<'PY'
-          import json
-          import os
-          import tomllib
+          import json, os, re
           from pathlib import Path
 
-          expected = os.environ["EXPECTED_VERSION"]
-          pyproject = tomllib.loads(Path("packages/python/pyproject.toml").read_text(encoding="utf-8"))
-          py_version = pyproject["project"]["version"]
-          ts_version = json.loads(Path("packages/typescript/package.json").read_text(encoding="utf-8"))["version"]
-
+          expected = os.environ["VERSION"]
           errors = []
-          if py_version != expected:
-            errors.append(f"Python version mismatch: expected {expected}, found {py_version}")
-          if ts_version != expected:
-            errors.append(f"TypeScript version mismatch: expected {expected}, found {ts_version}")
+
+          # Python
+          pyproject = Path("packages/python/pyproject.toml").read_text()
+          m = re.search(r'^version\s*=\s*"(.+?)"', pyproject, re.MULTILINE)
+          if not m or m.group(1) != expected:
+              errors.append(f"pyproject.toml: expected {expected}, found {m.group(1) if m else 'MISSING'}")
+
+          # TypeScript
+          ts = json.loads(Path("packages/typescript/package.json").read_text())
+          if ts["version"] != expected:
+              errors.append(f"package.json (ts): expected {expected}, found {ts['version']}")
 
           if errors:
-            raise SystemExit("\n".join(errors))
-          print(f"Version check passed: {expected}")
+              raise SystemExit("\n".join(errors))
+          print(f"All versions match: {expected}")
           PY
 
-  build-python:
-    name: Build Python distributions
-    needs: [prepare, test-python, test-typescript]
+      - name: Commit if needed
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/python/pyproject.toml packages/typescript/package.json
+          if ! git diff --cached --quiet; then
+            git commit -m "release: v${VERSION}"
+            git push origin main
+          fi
+
+      - name: Create and push tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git tag -f "v${VERSION}"
+          git push origin "v${VERSION}" --force
+
+  test-python:
+    name: Test Python package
+    needs: bump-and-tag
     runs-on: ubuntu-latest
     steps:
       - name: Checkout tag
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.ref }}
+          ref: refs/tags/v${{ inputs.version }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install and test
+        working-directory: packages/python
+        run: |
+          pip install -e ".[dev]"
+          python -m pytest tests/ -v
+
+  test-typescript:
+    name: Test TypeScript package
+    needs: bump-and-tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/v${{ inputs.version }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install and test
+        working-directory: packages/typescript
+        run: |
+          npm install
+          npm test
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [test-python, test-typescript]
+    if: ${{ !inputs.dry_run && (inputs.target == 'all' || inputs.target == 'pypi') }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/v${{ inputs.version }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -114,107 +164,15 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
-      - name: Upload Python artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-dist
-          path: packages/python/dist/*
-
-  test-python:
-    name: Test Python package
-    needs: prepare
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.ref }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        working-directory: packages/python
-        run: pip install -e ".[dev]"
-
-      - name: Run Python tests
-        working-directory: packages/python
-        run: python -m pytest tests/ -v
-
-  test-typescript:
-    name: Test TypeScript package
-    needs: prepare
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.ref }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install TypeScript dependencies
-        working-directory: packages/typescript
-        run: npm install
-
-      - name: Run TypeScript tests
-        working-directory: packages/typescript
-        run: npm test
-
-  publish-testpypi:
-    name: Publish to TestPyPI
-    needs: [prepare, build-python]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.python_repository == 'testpypi' }}
-    runs-on: ubuntu-latest
-    environment: testpypi
-    permissions:
-      id-token: write
-    steps:
-      - name: Download Python artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: python-dist
-          path: dist
-
-      - name: Publish package distributions to TestPyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          repository-url: https://test.pypi.org/legacy/
-          packages-dir: dist
-          skip-existing: true
-
-  publish-pypi:
-    name: Publish to PyPI
-    needs: [prepare, build-python]
-    if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.python_repository == 'pypi') }}
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - name: Download Python artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: python-dist
-          path: dist
-
-      - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist
-          skip-existing: true
+          packages-dir: packages/python/dist
 
   publish-npm:
     name: Publish to npm
-    needs: [prepare, test-typescript]
-    if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_npm) }}
+    needs: [test-python, test-typescript]
+    if: ${{ !inputs.dry_run && (inputs.target == 'all' || inputs.target == 'npm') }}
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -224,8 +182,7 @@ jobs:
       - name: Checkout tag
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.ref }}
+          ref: refs/tags/v${{ inputs.version }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -233,12 +190,31 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install package dependencies
-        working-directory: packages/typescript
-        run: npm install
-
-      - name: Publish @llm-jury/core
+      - name: Install and publish
         working-directory: packages/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+        run: |
+          npm install
+          npm publish --access public --provenance
+
+  github-release:
+    name: Create GitHub Release
+    needs: [publish-pypi, publish-npm]
+    if: ${{ !inputs.dry_run && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/v${{ inputs.version }}
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            --title "v${{ inputs.version }}" \
+            --generate-notes
