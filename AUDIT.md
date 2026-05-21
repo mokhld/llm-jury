@@ -202,24 +202,26 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 ## 9. Prioritized Roadmap
 
-### P0 — fix before next release
+### P0 — fix before next release ✅ all landed
 
-- B1: TS `classifyBatch` race condition.
-- B2: `gather` / `Promise.all` swallow per-juror errors → use `return_exceptions=True` and surface failures.
-- B3: empty-labels crash in Python `LLMClassifier`.
-- O2: capture `model` + `seed` + `library_version` in `Verdict` (provenance).
-- D1: kill the static test badges.
-- H1: commit (or ignore) the lock files.
+- ~~B1~~: TS `classifyBatch` race → semaphore + per-task `Promise.all` (commit 04c70e5).
+- ~~B2~~: `gather` / `Promise.all` swallow per-juror errors → `return_exceptions=True` + per-task fallback (commit 04c70e5).
+- ~~B3~~: empty-labels crash in Python `LLMClassifier` → validation (commit 04c70e5).
+- ~~O2~~: `Verdict` provenance — `library_version`, `created_at`, TS class with `toDict()`/`toJSON()` (commit 04c70e5).
+- ~~D1~~: dynamic CI badge (commit 04c70e5).
+- ~~H1~~: lock files committed (commit 04c70e5).
 
 ### P1 — next sprint
 
-- ~~R2: cost guard before-the-fact, not after.~~ ✅ Landed: pre-flight estimate + per-batch guard in TS rounds.
-- ~~O1: structured logging hooks in TS (parity with Python).~~ ✅ Landed (commit 85e98d2).
-- A1+A2: TS `Verdict` class + extract `fallbackVerdict` helper. (A1 landed in P0; A2 still open.)
-- C1: lint + type-check + ruff/black in CI.
-- E1: TypeScript examples.
-- F2: structured-output (JSON Schema) for persona responses.
-- ~~B4, B6~~: judge-field overwrite, cost coercion: **landed**. (~~B8, B9~~ 429/5xx retry handling: also landed.)
+- ~~R2~~: cost guard before-the-fact, not after — pre-flight estimate + per-batch guard (PR #4).
+- ~~O1~~: structured logging hooks in TS (parity with Python) (commit 85e98d2).
+- ~~A1~~: TS `Verdict` class (landed in P0).
+- ~~B4, B6~~: judge-field overwrite + TS cost coercion (PR #6).
+- ~~B8, B9~~: 429/5xx retry hardening (PR #5).
+- **Open:** A2 — extract `fallbackVerdict()` helper in TS (judges/{majorityVote,bayesian,weightedVote}.ts duplicate the "no persona responses" branch).
+- **Open:** C1 — lint + type-check + ruff/black in CI. Today CI runs `npm test` and `pytest` only; `npm run check` and ruff/black exist locally but aren't gates.
+- **Open:** E1 — TypeScript versions of the 4 Python examples in `examples/`.
+- **Open:** F2 — structured-output (JSON Schema) for persona responses (replace fragile `safe_json_parse`).
 
 ### P2 — quality polish
 
@@ -239,13 +241,11 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 ## 10. Notes on the "Parity" Claim
 
-The commit message for the TS port says "full parity port with native type safety." That claim is **partially true**: the surface API and core flow are mirrored, but:
+The original TS-port commit message said "full parity port with native type safety." After the P0 and most of the P1 work, that claim is now substantially true. Remaining asymmetries:
 
-- `Verdict` is a `type` not a class → no methods.
-- No logging.
-- `classifyBatch` has a correctness bug Python doesn't.
-- `ClassificationResult.cost_usd` is missing in TS base.
-- Several judge fallback paths are duplicated rather than shared.
-- Hardcoded `"gpt-5-mini"` fallback diverges from Python's `DEFAULT_MODEL`.
-
-Recommend softening the claim in the README to "feature-equivalent SDK; see CHANGELOG for parity status" until the P0/P1 items land.
+- ~~`Verdict` is a `type` not a class~~ → **fixed (P0).**
+- ~~No logging~~ → **fixed (O1).**
+- ~~`classifyBatch` has a correctness bug Python doesn't~~ → **fixed (P0).**
+- `ClassificationResult.cost_usd` is still missing in TS base (audit A3 — open in P2).
+- ~~Judge fallback paths duplicated~~ → still true in TS (audit A2 — open in P1).
+- ~~Hardcoded `"gpt-5-mini"` fallback diverges from Python's `DEFAULT_MODEL`~~ → audit B5, still open.
