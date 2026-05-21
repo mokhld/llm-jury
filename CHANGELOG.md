@@ -38,6 +38,13 @@ marked **[py]** or **[ts]**.
   `pyproject.toml`) and `eslint` (TypeScript, flat config in
   `eslint.config.js`) now run as a dedicated `lint` job in CI.
   `pip install -e ".[dev]"` brings the Python tooling in.
+- **Response cache (F3)**: opt-in `CachingLLMClient` in both SDKs.
+  LRU wrapper around any `LLMClient`, keyed on
+  `(model, system_prompt, prompt, temperature, response_format)`.
+  Configurable `max_size` (default 1000) and optional `ttl_seconds`.
+  Successful responses only — exceptions propagate uncached.
+  Exposes `hits`, `misses`, `size`, and `clear()`. No behaviour
+  change unless wrapped explicitly.
 
 ### Changed
 - **[py]** Two `zip(...)` call sites in

@@ -89,7 +89,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | R3 | No hard `max_tokens` on LLM calls — long transcripts can blow context and cost. | `llm/client.py`, `llm/client.ts` |
 | R4 | TypeScript timeout hardcoded to 60s. | `llm/client.ts:82` |
 | R5 | Consensus check uses label equality only — doesn't consider confidence; entropy-based early stop would cut cost. | `debate/engine.py:434` |
-| R6 | No response cache. Identical `(model, prompt)` → re-queried every time. | global |
+| ~~R6~~ | ~~No response cache. Identical `(model, prompt)` → re-queried every time.~~ **Fixed** (F3): opt-in `CachingLLMClient` wrapper exposed from both SDKs. LRU with optional TTL, keyed on `(model, system_prompt, prompt, temperature, response_format)`. Successful responses only. | global |
 | R7 | 429s and 5xx now trigger retry (B8/B9), but the `Retry-After` server hint is still ignored — backoff is purely exponential. | `llm/client.py`, `llm/client.ts` |
 | R8 | `classify_batch` builds all coroutines up-front — memory spike at 100k+ items. | `jury/core.py:130-137` |
 | R9 | `Classifier.classify_batch()` base impl is sequential `await` in a list-comp — defeats batching unless every subclass overrides. | `classifiers/base.py:23-24` |
@@ -131,7 +131,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 |---|---------|
 | F1 | **Streaming verdicts** — yield persona responses as they arrive (async generator / `AsyncIterable`). |
 | ~~F2~~ | ~~**Structured-output enforcement** via JSON Schema — replaces fragile `safe_json_parse`.~~ **Fixed (persona path)**: both SDKs now build `build_persona_response_schema(labels)` (`personas/schema.py` / `personas/schema.ts`) and pass it as `response_format` to `LLMClient.complete()`. LiteLLMClient forwards it on Python/TS. `safe_json_parse` remains as defensive fallback. `LLMClassifier`'s own JSON parse path is intentionally out of scope here — separate follow-up. |
-| F3 | **Response cache** (LRU keyed by `(model, system, prompt, temperature, seed)`) with TTL. |
+| ~~F3~~ | ~~**Response cache** (LRU keyed by `(model, system, prompt, temperature, seed)`) with TTL.~~ **Fixed**: `CachingLLMClient` in both SDKs (`packages/python/src/llm_jury/llm/cache.py`, `packages/typescript/src/llm/cache.ts`). Opt-in wrapper, LRU + optional TTL, key includes `response_format` (we don't track `seed`). |
 | F4 | **Cost pre-estimate** — before running a debate, estimate `N_personas × M_rounds × avg_tokens × $/tok` so users can decide. |
 | F5 | **Verdict replay** — given a captured provenance block, replay deterministically (requires O2). |
 | F6 | **Async callbacks / webhooks** — emit a verdict to Kafka / HTTP endpoint when ready. |
@@ -226,7 +226,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 ### P2 — quality polish
 
-- F3 (cache), F4 (cost pre-estimate), F7 (entropy early stop).
+- ~~F3 (cache)~~ **closed**: `CachingLLMClient` shipped in both SDKs (opt-in LRU + optional TTL). F4 (cost pre-estimate) and F7 (entropy early stop) still open.
 - ~~T1–T10: fill test gaps.~~ **All closed** (PR #10, #11, #12). T7 retry-exhaustion subset still open but low priority.
 - ~~D2–D6: governance files.~~ **Closed**: `CONTRIBUTING.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, and `.github/ISSUE_TEMPLATE/` (bug + feature + config) all landed.
 - ~~D7: troubleshooting section in any README.~~ **Closed**: tables in root + both package READMEs.

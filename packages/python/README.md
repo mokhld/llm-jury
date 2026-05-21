@@ -358,6 +358,32 @@ Report: `calibration_report()` returns rows with threshold, accuracy, escalation
 - Returns: `{content, tokens, cost_usd}` (`cost_usd` may be `None`)
 - Raises a runtime error if `litellm` is not installed and no custom `llm_client` is injected.
 
+### Response Cache (`CachingLLMClient`)
+
+Opt-in LRU wrapper around any `LLMClient`. Keyed on
+`(model, system_prompt, prompt, temperature, response_format)`.
+Successful responses only — exceptions propagate without being cached.
+
+```python
+from llm_jury import CachingLLMClient, Jury
+from llm_jury.llm import LiteLLMClient
+
+jury = Jury(
+    # ...
+    llm_client=CachingLLMClient(
+        LiteLLMClient(),
+        max_size=1000,        # LRU cap
+        ttl_seconds=3600,     # optional; omit for no expiry
+    ),
+)
+```
+
+`hits`, `misses`, and `size` are exposed for introspection. Call
+`clear()` to drop everything. The cache is in-process and per-instance;
+share the `CachingLLMClient` object across `Jury` instances if you want
+a shared cache. Caches at any temperature — if you need fresh stochastic
+samples, don't wrap.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
