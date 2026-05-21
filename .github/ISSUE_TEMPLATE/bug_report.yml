@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a bug in the Python or TypeScript SDK.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in
+        as much detail as you can — minimal repros are the single
+        biggest factor in how fast a bug gets fixed.
+
+        For security issues, **do not** file a public issue. See
+        [SECURITY.md](../SECURITY.md) for the disclosure process.
+
+  - type: dropdown
+    id: sdk
+    attributes:
+      label: Which SDK?
+      options:
+        - Python (llm-jury-classifier)
+        - TypeScript (@llm-jury/core)
+        - Both
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: Output of `pip show llm-jury-classifier` or `npm ls @llm-jury/core`.
+      placeholder: "0.1.1"
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime version
+      description: Python version (e.g. 3.12.1) or Node version (e.g. v22.4.0).
+      placeholder: "Python 3.12.1 / Node v22.4.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you actually see?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: |
+        The smallest code snippet + input that triggers the bug.
+        If the bug only shows up against a specific LLM provider,
+        say which one (and your `LLMClient` configuration with
+        secrets redacted).
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Stack trace or logs
+      description: Paste the full stack trace if applicable.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else?
+      description: Workarounds you tried, related issues, etc.
+    validations:
+      required: false

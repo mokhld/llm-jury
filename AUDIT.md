@@ -167,11 +167,11 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | # | Issue |
 |---|-------|
 | D1 | Root `README.md:8-9` has **static "55 passed / 38 passed" badges** — will rot. Use dynamic badges from CI or remove. |
-| D2 | No `CONTRIBUTING.md`. |
-| D3 | No `CHANGELOG.md`. Release workflow uses `--generate-notes` but nothing is committed. |
-| D4 | No `CODE_OF_CONDUCT.md`. |
-| D5 | No `SECURITY.md` (S5). |
-| D6 | No GitHub issue templates (`.github/ISSUE_TEMPLATE/`). |
+| ~~D2~~ | ~~No `CONTRIBUTING.md`.~~ **Fixed**: `CONTRIBUTING.md` covers monorepo layout, test commands, branch / commit / PR workflow, and what to work on. |
+| ~~D3~~ | ~~No `CHANGELOG.md`. Release workflow uses `--generate-notes` but nothing is committed.~~ **Fixed**: Keep-a-Changelog-style `CHANGELOG.md` with `[Unreleased]` section and `[0.1.1]` baseline; `[py]` / `[ts]` tags mark SDK-specific entries. |
+| ~~D4~~ | ~~No `CODE_OF_CONDUCT.md`.~~ **Fixed**: Contributor Covenant v2.1 with maintainer contact. |
+| ~~D5~~ | ~~No `SECURITY.md` (S5).~~ **Fixed**: disclosure process, supported-versions table, scope (in/out), hardening recommendations for users. |
+| ~~D6~~ | ~~No GitHub issue templates (`.github/ISSUE_TEMPLATE/`).~~ **Fixed**: YAML form templates for bug report and feature request, plus `config.yml` that disables blank issues and routes security reports to a private channel. |
 | D7 | No troubleshooting section in any README. |
 
 ### Examples
@@ -228,7 +228,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 - F3 (cache), F4 (cost pre-estimate), F7 (entropy early stop).
 - ~~T1–T10: fill test gaps.~~ **All closed** (PR #10, #11, #12). T7 retry-exhaustion subset still open but low priority.
-- D2–D6: governance files.
+- ~~D2–D6: governance files.~~ **Closed**: `CONTRIBUTING.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, and `.github/ISSUE_TEMPLATE/` (bug + feature + config) all landed.
 - A5: builder / preset factories.
 - ~~C4: `py.typed`.~~ Closed in PR #13.
 - C1b: lint gates (ruff/black for Python, eslint for TS) — net-new tooling, surfaces unknown fix volume.
