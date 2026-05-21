@@ -84,6 +84,13 @@ class DebateModeTests(unittest.IsolatedAsyncioTestCase):
         failed = next(r for r in transcript.rounds[0] if r.persona_name == "B")
         self.assertEqual(failed.confidence, 0.0)
         self.assertIn("Persona call failed", failed.reasoning)
+        # Non-failed personas must succeed — locks the response_format plumbing
+        # in _FlakyLLMClient. Without it, every persona would silently fall back
+        # and this assertion would catch the regression.
+        for name in ("A", "C"):
+            ok = next(r for r in transcript.rounds[0] if r.persona_name == name)
+            self.assertAlmostEqual(ok.confidence, 0.8)
+            self.assertEqual(ok.label, "safe")
 
     async def test_one_persona_failure_does_not_crash_sequential_mode(self) -> None:
         llm = _FlakyLLMClient(fail_for={"B"})
@@ -141,12 +148,24 @@ class _FlakyLLMClient:
     Personas in these tests have system_prompt equal to their name ("A", "B", "C"),
     so exact-match keeps the flaky behaviour scoped to persona calls and never
     fires on the summarisation prompt.
+
+    Accepts ``response_format`` because real LLM clients (and LiteLLMClient)
+    receive it from the debate engine; without it the call signature would
+    mismatch and every persona would silently fall back instead of only the
+    targeted ones.
     """
 
     def __init__(self, fail_for: set[str]) -> None:
         self.fail_for = fail_for
 
-    async def complete(self, model: str, system_prompt: str, prompt: str, temperature: float = 0.0):
+    async def complete(
+        self,
+        model: str,
+        system_prompt: str,
+        prompt: str,
+        temperature: float = 0.0,
+        response_format=None,
+    ):
         if system_prompt in self.fail_for:
             raise RuntimeError(f"simulated upstream failure for persona {system_prompt}")
         return {
