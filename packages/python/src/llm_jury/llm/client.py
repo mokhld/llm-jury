@@ -5,7 +5,7 @@ from typing import Any, Protocol
 
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -14,6 +14,31 @@ logger = logging.getLogger(__name__)
 
 # Models whose API does not accept a ``temperature`` parameter.
 _NO_TEMPERATURE_PREFIXES = ("o1", "o3", "gpt-5")
+
+# litellm raises typed errors; we match by class name so we don't take
+# a hard runtime dependency on `import litellm` at module load time.
+_LITELLM_RETRYABLE_NAMES = frozenset(
+    {
+        "APIConnectionError",
+        "APIError",
+        "InternalServerError",
+        "RateLimitError",
+        "ServiceUnavailableError",
+        "Timeout",
+    }
+)
+
+
+def _is_retryable_error(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+    if type(exc).__name__ in _LITELLM_RETRYABLE_NAMES:
+        return True
+    for attr in ("status_code", "http_status", "status"):
+        status = getattr(exc, attr, None)
+        if isinstance(status, int) and (status == 429 or 500 <= status < 600):
+            return True
+    return False
 
 
 class LLMClient(Protocol):
@@ -30,7 +55,7 @@ class LiteLLMClient:
     """Production LLM client backed by litellm."""
 
     @retry(
-        retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
+        retry=retry_if_exception(_is_retryable_error),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
