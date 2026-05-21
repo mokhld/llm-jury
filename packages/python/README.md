@@ -358,6 +358,26 @@ Report: `calibration_report()` returns rows with threshold, accuracy, escalation
 - Returns: `{content, tokens, cost_usd}` (`cost_usd` may be `None`)
 - Raises a runtime error if `litellm` is not installed and no custom `llm_client` is injected.
 
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `Authentication`/`401` error on first LLM call | `OPENAI_API_KEY` not set, or wrong provider key for the model | `export OPENAI_API_KEY=...`; or pass `llm_client=LiteLLMClient(api_key=...)` |
+| `ImportError: No module named 'litellm'` | `litellm` not installed and no custom `llm_client` injected | `pip install llm-jury-classifier` (litellm is a hard dep); or inject your own `llm_client` |
+| `ImportError: transformers` / `numpy` | Using `HuggingFaceClassifier` / `SklearnClassifier` without the extras | `pip install "llm-jury-classifier[huggingface]"` or `[sklearn]` |
+| `ValueError: labels cannot be empty` | `LLMClassifier(labels=[])` | Pass at least one label |
+| `Verdict.label` is the first label with `confidence=0.0` | `LLMClassifier` couldn't parse the model's JSON response | Use a model that supports `response_format`; persona responses are schema-constrained (F2), but `LLMClassifier`'s own parse path is not yet — see audit S3 |
+| Repeated 429s and the whole call fails | Rate-limit budget exhausted; SDK retries 3× with exponential backoff but doesn't honour `Retry-After` (R7) | Lower `debate_concurrency`; lower batch `concurrency`; use a higher-tier key |
+| `verdict.judge_strategy == "cost_guard_pre_flight"` (no debate ran) | Pre-flight estimate (`N personas × max_rounds × estimated_cost_per_persona_usd`) exceeded `max_debate_cost_usd` | Raise the cap, lower `max_rounds`, or accept the primary classifier verdict |
+| `verdict.judge_strategy == "cost_guard_primary_fallback"` (debate ran partially) | Actual mid-debate spend hit the cap | Same as above; spend can still overshoot by up to one concurrency-batch (in-flight calls aren't cancellable) |
+| `verdict.total_cost_usd is None` | Model not in litellm's pricing table | Check `litellm.model_cost`; pin to a known-priced model; or compute cost yourself in a custom `llm_client` |
+| Verdict is never escalated even at very low confidence | `personas=[]` silently disables escalation (by design) | Pass at least one persona |
+| One persona always missing from `verdict.debate_transcript.rounds` | That persona's `model` is invalid / not available to your key. Single-persona failure no longer crashes the verdict (B2 fix) — it's dropped | Inspect logs; fix the persona's `model` or remove the persona |
+| Debate summary is `None` even in deliberation mode | Summariser LLM call failed; persona rounds are still load-bearing (post-D6 fix) | Inspect logs for the warning; verify the persona-0 model is reachable |
+| `verdict.total_duration_ms` is `0` from a custom judge | Custom judge didn't set the field; Jury only backfills when at default | Set `total_duration_ms` in your judge if you want a custom value |
+
+For deeper context on known open issues, see `AUDIT.md` §3 (Reliability) and §1 (Bugs).
+
 ## Examples
 
 Runnable examples in `examples/` (require `OPENAI_API_KEY`):

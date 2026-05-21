@@ -30,6 +30,10 @@ marked **[py]** or **[ts]**.
   (T3), summariser failure (T5), malformed persona JSON (T6).
 - Governance files: `CONTRIBUTING.md`, `CHANGELOG.md`,
   `CODE_OF_CONDUCT.md`, `SECURITY.md`, GitHub issue templates.
+- Troubleshooting sections in the root README and both package
+  READMEs covering auth, parse fallback, 429 exhaustion, both
+  cost-guard markers, cost-tracking gaps, empty personas, and the
+  TS-specific 60s timeout / silent-logger gotchas.
 
 ### Fixed
 - **Summariser failure no longer crashes the verdict** (both SDKs).
