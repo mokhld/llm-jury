@@ -178,7 +178,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 | # | Issue |
 |---|-------|
-| E1 | **Zero TypeScript examples.** Python has 4 (`content_moderation.py`, `custom_personas.py`, `legal_compliance.py`, `threshold_calibration.py`). Add TS versions in `examples/typescript/`. |
+| ~~E1~~ | ~~**Zero TypeScript examples.** Python has 4.~~ **Fixed**: `examples/typescript/{content_moderation,custom_personas,legal_compliance,threshold_calibration}.ts` mirror the Python examples; type-checked in CI via new `npm run check:examples` (uses a separate tsconfig that points the `@llm-jury/core` alias at the built `dist/index.d.ts` so examples see the user-facing surface). |
 
 ### CI/CD
 
@@ -221,7 +221,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 - ~~A2~~ — extracted `fallbackVerdict()` helper in TS (judges/base.ts); majorityVote / bayesian / weightedVote now delegate.
 - ~~C1~~ (tsc) — `npm run check` is now a CI gate.
 - **Open:** C1b — lint gates (ruff/black for Python, eslint for TS). Net-new tooling — none of these are installed in the project today. Separate sprint because it surfaces unknown fix volume.
-- **Open:** E1 — TypeScript versions of the 4 Python examples in `examples/`.
+- ~~E1~~ — TypeScript versions of the 4 Python examples in `examples/typescript/`; type-checked in CI via `npm run check:examples`.
 - **Open:** F2 — structured-output (JSON Schema) for persona responses (replace fragile `safe_json_parse`).
 
 ### P2 — quality polish
