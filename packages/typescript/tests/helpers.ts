@@ -5,15 +5,27 @@ export type LLMReply = {
 };
 
 export class FakeLLMClient {
-  public calls: Array<{ model: string; systemPrompt: string; prompt: string; temperature: number }> = [];
+  public calls: Array<{
+    model: string;
+    systemPrompt: string;
+    prompt: string;
+    temperature: number;
+    responseFormat?: Record<string, unknown>;
+  }> = [];
   private replies: Record<string, LLMReply>;
 
   constructor(replies: Record<string, LLMReply> = {}) {
     this.replies = replies;
   }
 
-  async complete(model: string, systemPrompt: string, prompt: string, temperature = 0): Promise<{ content: string; tokens: number; costUsd: number }> {
-    this.calls.push({ model, systemPrompt, prompt, temperature });
+  async complete(
+    model: string,
+    systemPrompt: string,
+    prompt: string,
+    temperature = 0,
+    responseFormat?: Record<string, unknown>,
+  ): Promise<{ content: string; tokens: number; costUsd: number }> {
+    this.calls.push({ model, systemPrompt, prompt, temperature, responseFormat });
 
     if (this.replies[model]) {
       const reply = this.replies[model];

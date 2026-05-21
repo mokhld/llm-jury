@@ -10,6 +10,7 @@ from llm_jury._defaults import DEFAULT_MODEL
 from llm_jury.classifiers.base import ClassificationResult
 from llm_jury.llm.client import LLMClient, LiteLLMClient
 from llm_jury.personas.base import Persona, PersonaResponse
+from llm_jury.personas.schema import build_persona_response_schema
 from llm_jury.utils import clamp_confidence, safe_json_parse, strip_markdown_fences
 
 logger = logging.getLogger(__name__)
@@ -290,6 +291,7 @@ class DebateEngine:
             system_prompt=persona.system_prompt,
             prompt=prompt,
             temperature=persona.temperature,
+            response_format=build_persona_response_schema(labels),
         )
         raw_content = payload.get("content", "")
         response = self._parse_persona_response(raw_content, persona.name, labels)
@@ -463,13 +465,14 @@ class DebateEngine:
                 key_factors=[],
             )
 
+        dissent_raw = payload.get("dissent_notes")
         return PersonaResponse(
             persona_name=persona_name,
             label=str(payload.get("label", "unknown")),
             confidence=clamp_confidence(payload.get("confidence", 0.0)),
             reasoning=str(payload.get("reasoning", "")),
             key_factors=[str(item) for item in payload.get("key_factors", [])],
-            dissent_notes=(str(payload["dissent_notes"]) if "dissent_notes" in payload else None),
+            dissent_notes=str(dissent_raw) if dissent_raw is not None else None,
             raw_response=None,
             tokens_used=0,
             cost_usd=0.0,

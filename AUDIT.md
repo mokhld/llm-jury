@@ -52,8 +52,8 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | B11 | `packages/python/src/llm_jury/llm/client.py:65` | `int(usage.total_tokens or 0)` silently turns `None` into `0` — masks cost-tracking bugs. |
 | B12 | `packages/typescript/src/classifiers/huggingFaceAdapter.ts:38` | Runtime shape detection via `Array.isArray(raw[0])` instead of discriminated union — fragile. |
 | B13 | `packages/typescript/src/debate/engine.ts:119-120, 251-252` | `Number(response.tokensUsed ?? 0)` — string / NaN coerce silently. |
-| B14 | `packages/python/src/llm_jury/utils.py:19-21` | `safe_json_parse()` discards arrays/scalars (only returns dicts) and swallows the parse error — debugging is hard. |
-| B15 | `packages/python/src/llm_jury/judges/llm_judge.py:70-72` | Assumes LLM response has `"label"`; if missing, silently falls back without surfacing the malformed response. |
+| B14 | `packages/python/src/llm_jury/utils.py:19-21` | `safe_json_parse()` discards arrays/scalars (only returns dicts) and swallows the parse error — debugging is hard. **Mitigated for persona responses by F2** (schema-constrained); still applies to `LLMClassifier` + other JSON consumers. |
+| B15 | `packages/python/src/llm_jury/judges/llm_judge.py:70-72` | Assumes LLM response has `"label"`; if missing, silently falls back without surfacing the malformed response. (LLMJudge uses a separate code path; F2 only covers persona responses.) |
 | B16 | `packages/python/src/llm_jury/debate/engine.py:159-162` | Summarization in DELIBERATION runs even if consensus reached on round 1 — wasted LLM call. |
 
 ### Low
@@ -74,7 +74,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 |---|-------|-----------|
 | S1 | **Prompt injection** — user text is interpolated raw into persona prompts (`python/debate/engine.py:81-85`, `typescript/debate/engine.ts:281`). Adversarial input can override system instructions. | Add length cap, optional escaping helper, document risk in README, recommend wrapping untrusted text in delimiters and using structured-output APIs. |
 | S2 | **API keys may leak via exceptions / logs** — `litellm` errors can include request payloads. | Add a redaction wrapper around log/exception paths; document recommended logging hygiene. |
-| S3 | **Silent JSON parse failures hide adversarial / malformed responses** (B14, B15). | Add `on_parse_error` callback or strict-mode that raises instead of falling back. |
+| S3 | **Silent JSON parse failures hide adversarial / malformed responses** (B14, B15). **Partially mitigated** by F2 (persona responses now constrained server-side via JSON Schema `response_format`), but `safe_json_parse` is still the fallback when providers don't enforce. `on_parse_error` callback / strict-mode flag remain open. | Add `on_parse_error` callback or strict-mode that raises instead of falling back. |
 | S4 | **No input length cap** before sending to LLM — denial-of-wallet via large inputs. | Enforce `max_input_chars` with a clear error. |
 | S5 | **No SECURITY.md / vulnerability disclosure policy.** | Add SECURITY.md with contact + supported-versions table. |
 
@@ -130,7 +130,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | # | Feature |
 |---|---------|
 | F1 | **Streaming verdicts** — yield persona responses as they arrive (async generator / `AsyncIterable`). |
-| F2 | **Structured-output enforcement** via JSON Schema (OpenAI / Anthropic structured-output APIs) — replaces fragile `safe_json_parse`. |
+| ~~F2~~ | ~~**Structured-output enforcement** via JSON Schema — replaces fragile `safe_json_parse`.~~ **Fixed (persona path)**: both SDKs now build `build_persona_response_schema(labels)` (`personas/schema.py` / `personas/schema.ts`) and pass it as `response_format` to `LLMClient.complete()`. LiteLLMClient forwards it on Python/TS. `safe_json_parse` remains as defensive fallback. `LLMClassifier`'s own JSON parse path is intentionally out of scope here — separate follow-up. |
 | F3 | **Response cache** (LRU keyed by `(model, system, prompt, temperature, seed)`) with TTL. |
 | F4 | **Cost pre-estimate** — before running a debate, estimate `N_personas × M_rounds × avg_tokens × $/tok` so users can decide. |
 | F5 | **Verdict replay** — given a captured provenance block, replay deterministically (requires O2). |
@@ -222,7 +222,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 - ~~C1~~ (tsc) — `npm run check` is now a CI gate.
 - **Open:** C1b — lint gates (ruff/black for Python, eslint for TS). Net-new tooling — none of these are installed in the project today. Separate sprint because it surfaces unknown fix volume.
 - ~~E1~~ — TypeScript versions of the 4 Python examples in `examples/typescript/`; type-checked in CI via `npm run check:examples`.
-- **Open:** F2 — structured-output (JSON Schema) for persona responses (replace fragile `safe_json_parse`).
+- ~~F2~~ — structured-output JSON Schema for persona responses (`personas/schema.{py,ts}` + `response_format` threaded through `complete()` in both SDKs). `LLMClassifier`'s own JSON parsing not yet covered (separate follow-up if desired).
 
 ### P2 — quality polish
 
