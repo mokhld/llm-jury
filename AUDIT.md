@@ -37,9 +37,9 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 | # | Location | Issue |
 |---|----------|-------|
-| B4 | `packages/python/src/llm_jury/jury/core.py:117-120` | After `judge.judge()` returns, fields `was_escalated`, `primary_result`, `debate_transcript`, `total_duration_ms` are overwritten **unconditionally**. Discards any values the judge populated. |
+| ~~B4~~ | `packages/python/src/llm_jury/jury/core.py` | ~~After `judge.judge()` returns, fields `was_escalated`, `primary_result`, `debate_transcript`, `total_duration_ms` are overwritten **unconditionally**.~~ **Fixed**: Jury now backfills only when the field is at its default/unset value (None for refs, 0 for `total_duration_ms`). `was_escalated` remains Jury-authoritative (Jury knows we escalated). Default judges now emit `total_duration_ms=0` so Jury fills the true full-classify duration. |
 | B5 | `packages/typescript/src/debate/engine.ts:387` | Hardcoded fallback model `"gpt-5-mini"` when `personas` is empty — diverges from Python's `DEFAULT_MODEL` constant. |
-| B6 | `packages/typescript/src/judges/llmJudge.ts:61, 74` | Cost accumulation coerces `null` `totalCostUsd` to `0`, **losing actual cost** when the field starts nullable. |
+| ~~B6~~ | `packages/typescript/src/judges/llmJudge.ts` | ~~Cost accumulation coerces `null` `totalCostUsd` to `0`, losing actual cost when the field starts nullable.~~ **Fixed**: new `sumCosts(a, b)` helper returns `null` when both inputs are null/undefined (signaling cost tracking unavailable) and otherwise sums with unknowns treated as 0. |
 | B7 | `packages/typescript/src/jury/core.ts:140` | If a `classifyBatch` worker throws, `Promise.all` rejects and the caller gets no partial results — no per-item error handling. |
 | ~~B8~~ | `packages/python/src/llm_jury/llm/client.py` | ~~Tenacity retries on `ConnectionError`/`TimeoutError`/`OSError` only. Does not explicitly retry 429 / 503.~~ **Fixed**: custom `_is_retryable_error` predicate now also retries on litellm typed errors (matched by class name to avoid hard import) and any exception with `status_code` / `http_status` / `status` in {429, 500-599}. |
 | ~~B9~~ | `packages/typescript/src/llm/client.ts` | ~~Retryable-error detection uses a regex `5\d{2}\|429` on the error message — fragile; many SDK errors don't surface status this way.~~ **Fixed**: new exported `isRetryableError` inspects `err.status` / `err.statusCode` / `err.code` / `err.response?.status`; the regex fallback is kept for back-compat. The HTTP error thrown on `!response.ok` now carries `.status`. |
@@ -219,7 +219,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 - C1: lint + type-check + ruff/black in CI.
 - E1: TypeScript examples.
 - F2: structured-output (JSON Schema) for persona responses.
-- B4, B6: judge-field overwrite, cost coercion. (~~B8, B9~~ 429/5xx retry handling: landed.)
+- ~~B4, B6~~: judge-field overwrite, cost coercion: **landed**. (~~B8, B9~~ 429/5xx retry handling: also landed.)
 
 ### P2 — quality polish
 

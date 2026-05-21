@@ -35,6 +35,6 @@ class BayesianJudge(JudgeStrategy):
             primary_result=transcript.primary_result,
             debate_transcript=transcript,
             judge_strategy="bayesian",
-            total_duration_ms=transcript.duration_ms,
+            total_duration_ms=0,  # Jury fills in the full-classify duration.
             total_cost_usd=transcript.total_cost_usd,
         )

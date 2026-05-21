@@ -56,6 +56,6 @@ def _fallback_verdict(transcript: DebateTranscript, strategy_name: str) -> Verdi
         primary_result=pr,
         debate_transcript=transcript,
         judge_strategy=strategy_name,
-        total_duration_ms=getattr(transcript, "duration_ms", 0),
+        total_duration_ms=0,  # Jury fills in the full-classify duration.
         total_cost_usd=getattr(transcript, "total_cost_usd", None),
     )
