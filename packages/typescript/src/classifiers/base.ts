@@ -2,6 +2,7 @@ export type ClassificationResult = {
   label: string;
   confidence: number;
   rawOutput?: unknown;
+  costUsd?: number | null;
 };
 
 export interface Classifier {

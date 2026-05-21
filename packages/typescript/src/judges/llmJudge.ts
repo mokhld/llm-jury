@@ -1,6 +1,7 @@
 import type { LLMClient } from "../llm/client.ts";
 import { LiteLLMClient } from "../llm/client.ts";
 import type { DebateTranscript } from "../debate/engine.ts";
+import { DEFAULT_MODEL } from "../defaults.ts";
 import { Verdict } from "./base.ts";
 import type { JudgeStrategy } from "./base.ts";
 import { NOOP_LOGGER } from "../logger.ts";
@@ -54,7 +55,7 @@ export class LLMJudge implements JudgeStrategy {
   private logger: Logger;
 
   constructor(options: LLMJudgeOptions = {}) {
-    this.model = options.model ?? "gpt-5-mini";
+    this.model = options.model ?? DEFAULT_MODEL;
     this.systemPrompt = options.systemPrompt ?? LLMJudge.DEFAULT_SYSTEM_PROMPT;
     this.temperature = options.temperature ?? 0;
     this.llmClient = options.llmClient ?? new LiteLLMClient();
