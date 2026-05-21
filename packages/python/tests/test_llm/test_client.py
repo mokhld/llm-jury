@@ -27,7 +27,8 @@ class LiteLLMClientTests(unittest.IsolatedAsyncioTestCase):
 
         original = sys.modules.get("litellm")
         sys.modules["litellm"] = types.SimpleNamespace(
-            acompletion=fake_acompletion, completion_cost=fake_completion_cost,
+            acompletion=fake_acompletion,
+            completion_cost=fake_completion_cost,
         )
         try:
             client = LiteLLMClient()
@@ -53,7 +54,8 @@ class LiteLLMClientTests(unittest.IsolatedAsyncioTestCase):
 
         original = sys.modules.get("litellm")
         sys.modules["litellm"] = types.SimpleNamespace(
-            acompletion=fake_acompletion, completion_cost=fake_completion_cost,
+            acompletion=fake_acompletion,
+            completion_cost=fake_completion_cost,
         )
         try:
             client = LiteLLMClient()
@@ -79,7 +81,8 @@ class LiteLLMClientTests(unittest.IsolatedAsyncioTestCase):
 
         original = sys.modules.get("litellm")
         sys.modules["litellm"] = types.SimpleNamespace(
-            acompletion=fake_acompletion, completion_cost=fake_completion_cost,
+            acompletion=fake_acompletion,
+            completion_cost=fake_completion_cost,
         )
         try:
             client = LiteLLMClient()
@@ -110,27 +113,27 @@ class RetryPredicateTests(unittest.TestCase):
 
     def test_status_code_429_retries(self) -> None:
         exc = RuntimeError("rate limited")
-        setattr(exc, "status_code", 429)
+        exc.status_code = 429
         self.assertTrue(_is_retryable_error(exc))
 
     def test_status_code_503_retries(self) -> None:
         exc = RuntimeError("unavailable")
-        setattr(exc, "status_code", 503)
+        exc.status_code = 503
         self.assertTrue(_is_retryable_error(exc))
 
     def test_http_status_attribute_works(self) -> None:
         exc = RuntimeError("server error")
-        setattr(exc, "http_status", 502)
+        exc.http_status = 502
         self.assertTrue(_is_retryable_error(exc))
 
     def test_status_attribute_works(self) -> None:
         exc = RuntimeError("server error")
-        setattr(exc, "status", 500)
+        exc.status = 500
         self.assertTrue(_is_retryable_error(exc))
 
     def test_status_400_not_retried(self) -> None:
         exc = RuntimeError("bad request")
-        setattr(exc, "status_code", 400)
+        exc.status_code = 400
         self.assertFalse(_is_retryable_error(exc))
 
     def test_generic_exception_not_retried(self) -> None:

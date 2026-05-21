@@ -13,11 +13,13 @@ class MajorityVoteJudgeTests(unittest.IsolatedAsyncioTestCase):
         transcript = DebateTranscript(
             input_text="text",
             primary_result=ClassificationResult("unknown", 0.4),
-            rounds=[[
-                PersonaResponse("A", "unsafe", 0.9, "r1", ["a"]),
-                PersonaResponse("B", "unsafe", 0.8, "r2", ["b"]),
-                PersonaResponse("C", "unsafe", 0.7, "r3", ["c"]),
-            ]],
+            rounds=[
+                [
+                    PersonaResponse("A", "unsafe", 0.9, "r1", ["a"]),
+                    PersonaResponse("B", "unsafe", 0.8, "r2", ["b"]),
+                    PersonaResponse("C", "unsafe", 0.7, "r3", ["c"]),
+                ]
+            ],
             duration_ms=10,
             total_tokens=20,
             total_cost_usd=0.001,
@@ -31,11 +33,13 @@ class MajorityVoteJudgeTests(unittest.IsolatedAsyncioTestCase):
         transcript = DebateTranscript(
             input_text="text",
             primary_result=ClassificationResult("unknown", 0.4),
-            rounds=[[
-                PersonaResponse("A", "unsafe", 0.9, "r1", ["a"]),
-                PersonaResponse("B", "safe", 0.8, "r2", ["b"]),
-                PersonaResponse("C", "unsafe", 0.7, "r3", ["c"]),
-            ]],
+            rounds=[
+                [
+                    PersonaResponse("A", "unsafe", 0.9, "r1", ["a"]),
+                    PersonaResponse("B", "safe", 0.8, "r2", ["b"]),
+                    PersonaResponse("C", "unsafe", 0.7, "r3", ["c"]),
+                ]
+            ],
             duration_ms=10,
             total_tokens=20,
             total_cost_usd=0.001,

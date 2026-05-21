@@ -14,7 +14,9 @@ def _has_real_api_prereqs() -> bool:
     return True
 
 
-@unittest.skipUnless(_has_real_api_prereqs(), "Requires OPENAI_API_KEY and litellm installed")
+@unittest.skipUnless(
+    _has_real_api_prereqs(), "Requires OPENAI_API_KEY and litellm installed"
+)
 class RealAPISmokeTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_smoke_classification_pipeline(self) -> None:
         from llm_jury.classifiers.llm_classifier import LLMClassifier

@@ -16,12 +16,16 @@ class MajorityVoteJudge(JudgeStrategy):
         counts = Counter(response.label for response in final_round)
         winner, winner_count = counts.most_common(1)[0]
         confidence = winner_count / len(final_round)
-        reasons = [response.reasoning for response in final_round if response.label == winner]
+        reasons = [
+            response.reasoning for response in final_round if response.label == winner
+        ]
 
         return Verdict(
             label=winner,
             confidence=float(confidence),
-            reasoning=" ".join(reasons) if reasons else "Majority vote selected the winner.",
+            reasoning=(
+                " ".join(reasons) if reasons else "Majority vote selected the winner."
+            ),
             was_escalated=True,
             primary_result=transcript.primary_result,
             debate_transcript=transcript,

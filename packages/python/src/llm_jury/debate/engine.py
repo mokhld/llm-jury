@@ -8,7 +8,7 @@ from enum import Enum
 
 from llm_jury._defaults import DEFAULT_MODEL
 from llm_jury.classifiers.base import ClassificationResult
-from llm_jury.llm.client import LLMClient, LiteLLMClient
+from llm_jury.llm.client import LiteLLMClient, LLMClient
 from llm_jury.personas.base import Persona, PersonaResponse
 from llm_jury.personas.schema import build_persona_response_schema
 from llm_jury.utils import clamp_confidence, safe_json_parse, strip_markdown_fences
@@ -100,7 +100,9 @@ class DebateEngine:
             )
 
         if self.config.mode in (DebateMode.INDEPENDENT, DebateMode.ADVERSARIAL):
-            responses = await self._run_round(text, primary_result, labels, prior_rounds=[])
+            responses = await self._run_round(
+                text, primary_result, labels, prior_rounds=[]
+            )
             rounds.append(responses)
             for response in responses:
                 total_tokens += response.tokens_used
@@ -117,9 +119,13 @@ class DebateEngine:
                         labels=labels,
                         prior_rounds=[responses] if responses else [],
                     )
-                except Exception as exc:  # noqa: BLE001 — degrade gracefully on any persona failure
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 — degrade gracefully on any persona failure
                     logger.warning(
-                        "Persona %s failed during sequential debate: %s", persona.name, exc,
+                        "Persona %s failed during sequential debate: %s",
+                        persona.name,
+                        exc,
                     )
                     response = self._failed_persona_response(persona, exc, labels)
                 responses.append(response)
@@ -131,7 +137,9 @@ class DebateEngine:
 
         elif self.config.mode == DebateMode.DELIBERATION:
             # Stage 1: Initial opinions (parallel, independent)
-            first_round = await self._run_round(text, primary_result, labels, prior_rounds=[])
+            first_round = await self._run_round(
+                text, primary_result, labels, prior_rounds=[]
+            )
             rounds.append(first_round)
             for response in first_round:
                 total_tokens += response.tokens_used
@@ -150,7 +158,10 @@ class DebateEngine:
             # Stage 2: Structured debate rounds (personas engage with prior opinions)
             for _ in range(1, max(1, self.config.max_rounds)):
                 current = await self._run_deliberation_round(
-                    text, primary_result, labels, prior_rounds=rounds,
+                    text,
+                    primary_result,
+                    labels,
+                    prior_rounds=rounds,
                 )
                 rounds.append(current)
                 for response in current:
@@ -167,11 +178,18 @@ class DebateEngine:
             # missing synthesis must not crash the verdict.
             if not (max_cost_usd is not None and total_cost > max_cost_usd):
                 try:
-                    summary, s_tokens, s_cost = await self._summarise(text, labels, rounds)
+                    summary, s_tokens, s_cost = await self._summarise(
+                        text, labels, rounds
+                    )
                     total_tokens += s_tokens
                     total_cost += s_cost
-                except Exception as exc:  # noqa: BLE001 — same rationale as per-persona fallback
-                    logger.warning("Summarisation failed; returning transcript without summary: %s", exc)
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 — same rationale as per-persona fallback
+                    logger.warning(
+                        "Summarisation failed; returning transcript without summary: %s",
+                        exc,
+                    )
                     summary = None
 
         duration_ms = int((time.perf_counter() - start) * 1000)
@@ -200,7 +218,9 @@ class DebateEngine:
 
         async def _wrapped(persona: Persona) -> PersonaResponse:
             async with sem:
-                return await self._query_persona(persona, text, primary_result, labels, prior_rounds)
+                return await self._query_persona(
+                    persona, text, primary_result, labels, prior_rounds
+                )
 
         results = await asyncio.gather(
             *[_wrapped(persona) for persona in self.personas],
@@ -220,7 +240,11 @@ class DebateEngine:
         async def _wrapped(persona: Persona) -> PersonaResponse:
             async with sem:
                 return await self._query_persona_deliberation(
-                    persona, text, primary_result, labels, prior_rounds,
+                    persona,
+                    text,
+                    primary_result,
+                    labels,
+                    prior_rounds,
                 )
 
         results = await asyncio.gather(
@@ -235,10 +259,12 @@ class DebateEngine:
         labels: list[str],
     ) -> list[PersonaResponse]:
         out: list[PersonaResponse] = []
-        for persona, result in zip(self.personas, results):
+        for persona, result in zip(self.personas, results, strict=True):
             if isinstance(result, BaseException):
                 logger.warning(
-                    "Persona %s failed during debate round: %s", persona.name, result,
+                    "Persona %s failed during debate round: %s",
+                    persona.name,
+                    result,
                 )
                 out.append(self._failed_persona_response(persona, result, labels))
             else:
@@ -272,7 +298,9 @@ class DebateEngine:
         labels: list[str],
         prior_rounds: list[list[PersonaResponse]],
     ) -> PersonaResponse:
-        prompt = self._build_persona_prompt(persona, text, primary_result, labels, prior_rounds)
+        prompt = self._build_persona_prompt(
+            persona, text, primary_result, labels, prior_rounds
+        )
         return await self._call_persona(persona, prompt, labels)
 
     async def _query_persona_deliberation(
@@ -283,7 +311,9 @@ class DebateEngine:
         labels: list[str],
         prior_rounds: list[list[PersonaResponse]],
     ) -> PersonaResponse:
-        prompt = self._build_deliberation_prompt(persona, text, primary_result, labels, prior_rounds)
+        prompt = self._build_deliberation_prompt(
+            persona, text, primary_result, labels, prior_rounds
+        )
         return await self._call_persona(persona, prompt, labels)
 
     async def _call_persona(
@@ -323,7 +353,11 @@ class DebateEngine:
         ]
 
         for r_idx, round_responses in enumerate(rounds):
-            heading = "Initial Expert Opinions" if r_idx == 0 else f"Revised Opinions (Round {r_idx + 1})"
+            heading = (
+                "Initial Expert Opinions"
+                if r_idx == 0
+                else f"Revised Opinions (Round {r_idx + 1})"
+            )
             parts.append(f"## {heading}\n")
             for resp in round_responses:
                 parts.append(
@@ -357,7 +391,10 @@ class DebateEngine:
         labels: list[str],
         prior_rounds: list[list[PersonaResponse]],
     ) -> str:
-        parts = [f"## Persona\n\n{persona.name}: {persona.role}\n", f"## Input to Classify\n\n{text}\n"]
+        parts = [
+            f"## Persona\n\n{persona.name}: {persona.role}\n",
+            f"## Input to Classify\n\n{text}\n",
+        ]
         parts.append(f"## Available Labels\n\n{', '.join(labels)}\n")
 
         if self.config.mode == DebateMode.ADVERSARIAL:
@@ -371,7 +408,9 @@ class DebateEngine:
 
         if self.config.include_primary_result:
             confidence_suffix = (
-                f" (confidence: {primary.confidence:.2f})" if self.config.include_confidence else ""
+                f" (confidence: {primary.confidence:.2f})"
+                if self.config.include_confidence
+                else ""
             )
             parts.append(
                 "## Primary Classifier Result\n\n"
@@ -400,12 +439,17 @@ class DebateEngine:
         labels: list[str],
         prior_rounds: list[list[PersonaResponse]],
     ) -> str:
-        parts = [f"## Persona\n\n{persona.name}: {persona.role}\n", f"## Input to Classify\n\n{text}\n"]
+        parts = [
+            f"## Persona\n\n{persona.name}: {persona.role}\n",
+            f"## Input to Classify\n\n{text}\n",
+        ]
         parts.append(f"## Available Labels\n\n{', '.join(labels)}\n")
 
         if self.config.include_primary_result:
             confidence_suffix = (
-                f" (confidence: {primary.confidence:.2f})" if self.config.include_confidence else ""
+                f" (confidence: {primary.confidence:.2f})"
+                if self.config.include_confidence
+                else ""
             )
             parts.append(
                 "## Primary Classifier Result\n\n"
@@ -429,7 +473,9 @@ class DebateEngine:
                         f"Reasoning: {response.reasoning}\n"
                     )
 
-        parts.append(f"\n## Deliberation Instructions\n\n{_DELIBERATION_INSTRUCTIONS}\n")
+        parts.append(
+            f"\n## Deliberation Instructions\n\n{_DELIBERATION_INSTRUCTIONS}\n"
+        )
         parts.append(self._json_response_block())
         return "\n".join(parts)
 
@@ -461,7 +507,9 @@ class DebateEngine:
     ) -> PersonaResponse:
         payload = safe_json_parse(strip_markdown_fences(raw))
         if not isinstance(payload, dict):
-            logger.warning("Persona %s returned invalid JSON; using fallback.", persona_name)
+            logger.warning(
+                "Persona %s returned invalid JSON; using fallback.", persona_name
+            )
             fallback_label = labels[0] if labels else "unknown"
             return PersonaResponse(
                 persona_name=persona_name,

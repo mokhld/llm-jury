@@ -20,8 +20,20 @@ class CLITests(unittest.TestCase):
             input_path.write_text(
                 "\n".join(
                     [
-                        json.dumps({"text": "a", "predicted_label": "safe", "predicted_confidence": 0.95}),
-                        json.dumps({"text": "b", "predicted_label": "unsafe", "predicted_confidence": 0.96}),
+                        json.dumps(
+                            {
+                                "text": "a",
+                                "predicted_label": "safe",
+                                "predicted_confidence": 0.95,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "text": "b",
+                                "predicted_label": "unsafe",
+                                "predicted_confidence": 0.96,
+                            }
+                        ),
                     ]
                 )
                 + "\n",
@@ -108,8 +120,20 @@ class CLITests(unittest.TestCase):
             input_path.write_text(
                 "\n".join(
                     [
-                        json.dumps({"text": "t1", "predicted_label": "safe", "predicted_confidence": 0.9}),
-                        json.dumps({"text": "t2", "predicted_label": "unsafe", "predicted_confidence": 0.4}),
+                        json.dumps(
+                            {
+                                "text": "t1",
+                                "predicted_label": "safe",
+                                "predicted_confidence": 0.9,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "text": "t2",
+                                "predicted_label": "unsafe",
+                                "predicted_confidence": 0.4,
+                            }
+                        ),
                     ]
                 )
                 + "\n",

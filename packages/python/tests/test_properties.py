@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from llm_jury.classifiers.base import ClassificationResult
 from llm_jury.classifiers.function_adapter import FunctionClassifier
@@ -19,7 +20,9 @@ from llm_jury.personas.base import PersonaResponse
 )
 def test_escalation_boundary_property(confidence: float, threshold: float) -> None:
     """For any confidence and threshold: confidence >= threshold means no escalation."""
-    clf = FunctionClassifier(fn=lambda t: ("safe", confidence), labels=["safe", "unsafe"])
+    clf = FunctionClassifier(
+        fn=lambda t: ("safe", confidence), labels=["safe", "unsafe"]
+    )
     jury = Jury(classifier=clf, personas=[], confidence_threshold=threshold)
     result = ClassificationResult(label="safe", confidence=confidence)
 
@@ -50,7 +53,9 @@ def test_majority_vote_confidence_is_fraction(votes: list[str]) -> None:
     verdict = asyncio.run(judge.judge(transcript, ["safe", "unsafe"]))
 
     n = len(votes)
-    assert verdict.confidence == pytest.approx(round(verdict.confidence * n) / n, abs=1e-9)
+    assert verdict.confidence == pytest.approx(
+        round(verdict.confidence * n) / n, abs=1e-9
+    )
 
 
 @given(st.lists(st.sampled_from(["safe", "unsafe"]), min_size=1, max_size=10))

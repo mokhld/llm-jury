@@ -34,6 +34,23 @@ marked **[py]** or **[ts]**.
   READMEs covering auth, parse fallback, 429 exhaustion, both
   cost-guard markers, cost-tracking gaps, empty personas, and the
   TS-specific 60s timeout / silent-logger gotchas.
+- **Lint gates (C1b)**. `ruff` + `black` (Python, configured in
+  `pyproject.toml`) and `eslint` (TypeScript, flat config in
+  `eslint.config.js`) now run as a dedicated `lint` job in CI.
+  `pip install -e ".[dev]"` brings the Python tooling in.
+
+### Changed
+- **[py]** Two `zip(...)` call sites in
+  `calibration/optimizer.py` and `debate/engine.py` now pass
+  `strict=True` to make their same-length invariants explicit.
+  Same runtime behaviour when invariants hold; raises `ValueError`
+  immediately if they ever don't (instead of silently truncating).
+- **[py]** Five `setattr(obj, "literal", value)` calls in test
+  helpers simplified to direct attribute assignment.
+- **[py]** Unused `best = asyncio.run(...)` assignment dropped in
+  CLI `calibrate` (calibrator mutates `jury.threshold` in place).
+- **[py]** 32 files reformatted by `black` (whitespace / line wrap
+  only — no semantic changes).
 
 ### Fixed
 - **Summariser failure no longer crashes the verdict** (both SDKs).

@@ -184,7 +184,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 | # | Issue |
 |---|-------|
-| ~~C1~~ | ~~`ci.yml` runs tests only — **no lint (ruff/black/eslint), no type-check step** for TS.~~ **Partially fixed**: TS `npm run check` (tsc) is now a CI gate in `.github/workflows/ci.yml`. Lint (ruff/black/eslint) is still open — tracked as **C1b** in §9. |
+| ~~C1~~ | ~~`ci.yml` runs tests only — **no lint (ruff/black/eslint), no type-check step** for TS.~~ **Fully fixed**: TS `npm run check` (tsc) is a CI gate; C1b closed — ruff + black + eslint now run in a dedicated `lint` job in `.github/workflows/ci.yml` (Python configs in `pyproject.toml`, TS config in `eslint.config.js`). |
 | C2 | No dependabot config — supply-chain risk. |
 | C3 | No prerelease / RC channel in `release.yml`. |
 | ~~C4~~ | ~~No `py.typed` marker → Python type hints aren't exposed to downstream users.~~ **Fixed** (PR #13): added `packages/python/src/llm_jury/py.typed` and declared in `pyproject.toml [tool.setuptools.package-data]`; verified the marker lands in the built wheel. |
@@ -220,7 +220,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 - ~~B8, B9~~: 429/5xx retry hardening (PR #5).
 - ~~A2~~ — extracted `fallbackVerdict()` helper in TS (judges/base.ts); majorityVote / bayesian / weightedVote now delegate.
 - ~~C1~~ (tsc) — `npm run check` is now a CI gate.
-- **Open:** C1b — lint gates (ruff/black for Python, eslint for TS). Net-new tooling — none of these are installed in the project today. Separate sprint because it surfaces unknown fix volume.
+- ~~C1b~~ — ruff + black + eslint landed as a dedicated `lint` CI job. Initial cleanup: 6 ruff errors auto-fixed (5 unused imports + 1 `setattr` simplification), 3 manual (2 `zip(..., strict=True)`, 1 unused-local drop in CLI), 1 eslint unused-arg fix, 32 files black-reformatted. Configs in `pyproject.toml` and `eslint.config.js`.
 - ~~E1~~ — TypeScript versions of the 4 Python examples in `examples/typescript/`; type-checked in CI via `npm run check:examples`.
 - ~~F2~~ — structured-output JSON Schema for persona responses (`personas/schema.{py,ts}` + `response_format` threaded through `complete()` in both SDKs). `LLMClassifier`'s own JSON parsing not yet covered (separate follow-up if desired).
 
@@ -232,7 +232,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 - ~~D7: troubleshooting section in any README.~~ **Closed**: tables in root + both package READMEs.
 - A5: builder / preset factories.
 - ~~C4: `py.typed`.~~ Closed in PR #13.
-- C1b: lint gates (ruff/black for Python, eslint for TS) — net-new tooling, surfaces unknown fix volume.
+- ~~C1b: lint gates (ruff/black for Python, eslint for TS).~~ **Closed**: dedicated `lint` CI job; initial volume turned out small (10 ruff errors total, 32 black-reformat, 1 eslint).
 - ~~A3: `cost_usd` on TS `ClassificationResult` base (Python has it).~~ Closed in PR #13.
 - ~~B5: hardcoded `"gpt-5-mini"` fallback in TS diverges from Python's `DEFAULT_MODEL`.~~ Closed in PR #13.
 

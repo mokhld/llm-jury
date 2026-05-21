@@ -27,11 +27,13 @@ class BayesianJudgeTests(unittest.IsolatedAsyncioTestCase):
         transcript = DebateTranscript(
             input_text="text",
             primary_result=ClassificationResult("safe", 0.4),
-            rounds=[[
-                PersonaResponse("A", "unsafe", 0.9, "harm", ["h"]),
-                PersonaResponse("B", "unsafe", 0.8, "risk", ["r"]),
-                PersonaResponse("C", "safe", 0.55, "context", ["c"]),
-            ]],
+            rounds=[
+                [
+                    PersonaResponse("A", "unsafe", 0.9, "harm", ["h"]),
+                    PersonaResponse("B", "unsafe", 0.8, "risk", ["r"]),
+                    PersonaResponse("C", "safe", 0.55, "context", ["c"]),
+                ]
+            ],
             duration_ms=10,
             total_tokens=0,
             total_cost_usd=0.0,

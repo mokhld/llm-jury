@@ -20,9 +20,36 @@ class DebateModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_independent_mode_runs_single_round(self) -> None:
         responses = {
-            "A": FakeLLMReply(json.dumps({"label": "safe", "confidence": 0.8, "reasoning": "a", "key_factors": ["k1"]})),
-            "B": FakeLLMReply(json.dumps({"label": "unsafe", "confidence": 0.8, "reasoning": "b", "key_factors": ["k2"]})),
-            "C": FakeLLMReply(json.dumps({"label": "safe", "confidence": 0.8, "reasoning": "c", "key_factors": ["k3"]})),
+            "A": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "safe",
+                        "confidence": 0.8,
+                        "reasoning": "a",
+                        "key_factors": ["k1"],
+                    }
+                )
+            ),
+            "B": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "unsafe",
+                        "confidence": 0.8,
+                        "reasoning": "b",
+                        "key_factors": ["k2"],
+                    }
+                )
+            ),
+            "C": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "safe",
+                        "confidence": 0.8,
+                        "reasoning": "c",
+                        "key_factors": ["k3"],
+                    }
+                )
+            ),
         }
         llm = FakeLLMClient(responses)
         engine = DebateEngine(
@@ -52,9 +79,36 @@ class DebateModeTests(unittest.IsolatedAsyncioTestCase):
     async def test_deliberation_stops_on_consensus(self) -> None:
         llm = FakeLLMClient(
             {
-                "A": FakeLLMReply(json.dumps({"label": "safe", "confidence": 0.9, "reasoning": "a", "key_factors": ["x"]})),
-                "B": FakeLLMReply(json.dumps({"label": "safe", "confidence": 0.8, "reasoning": "b", "key_factors": ["y"]})),
-                "C": FakeLLMReply(json.dumps({"label": "safe", "confidence": 0.85, "reasoning": "c", "key_factors": ["z"]})),
+                "A": FakeLLMReply(
+                    json.dumps(
+                        {
+                            "label": "safe",
+                            "confidence": 0.9,
+                            "reasoning": "a",
+                            "key_factors": ["x"],
+                        }
+                    )
+                ),
+                "B": FakeLLMReply(
+                    json.dumps(
+                        {
+                            "label": "safe",
+                            "confidence": 0.8,
+                            "reasoning": "b",
+                            "key_factors": ["y"],
+                        }
+                    )
+                ),
+                "C": FakeLLMReply(
+                    json.dumps(
+                        {
+                            "label": "safe",
+                            "confidence": 0.85,
+                            "reasoning": "c",
+                            "key_factors": ["z"],
+                        }
+                    )
+                ),
             }
         )
         engine = DebateEngine(
@@ -167,7 +221,9 @@ class _FlakyLLMClient:
         response_format=None,
     ):
         if system_prompt in self.fail_for:
-            raise RuntimeError(f"simulated upstream failure for persona {system_prompt}")
+            raise RuntimeError(
+                f"simulated upstream failure for persona {system_prompt}"
+            )
         return {
             "content": json.dumps(
                 {

@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from llm_jury.classifiers.base import ClassificationResult, Classifier
 from llm_jury.debate.engine import DebateConfig, DebateEngine
 from llm_jury.judges.base import JudgeStrategy, Verdict
 from llm_jury.judges.llm_judge import LLMJudge
-from llm_jury.llm.client import LLMClient, LiteLLMClient
+from llm_jury.llm.client import LiteLLMClient, LLMClient
 from llm_jury.personas.base import Persona
 
 
@@ -134,7 +134,10 @@ class Jury:
             max_cost_usd=self.max_debate_cost_usd,
         )
 
-        if self.max_debate_cost_usd is not None and transcript.total_cost_usd is not None:
+        if (
+            self.max_debate_cost_usd is not None
+            and transcript.total_cost_usd is not None
+        ):
             if transcript.total_cost_usd > self.max_debate_cost_usd:
                 return Verdict(
                     label=primary.label,
@@ -173,7 +176,9 @@ class Jury:
 
         return verdict
 
-    async def classify_batch(self, texts: list[str], concurrency: int = 10) -> list[Verdict]:
+    async def classify_batch(
+        self, texts: list[str], concurrency: int = 10
+    ) -> list[Verdict]:
         sem = asyncio.Semaphore(max(1, concurrency))
 
         async def _classify(text: str) -> Verdict:

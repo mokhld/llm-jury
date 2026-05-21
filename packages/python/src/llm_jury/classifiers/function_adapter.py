@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from .base import ClassificationResult, Classifier
 
@@ -9,7 +9,10 @@ from .base import ClassificationResult, Classifier
 class FunctionClassifier(Classifier):
     def __init__(
         self,
-        fn: Callable[[str], tuple[str, float]] | Callable[[str], Awaitable[tuple[str, float]]],
+        fn: (
+            Callable[[str], tuple[str, float]]
+            | Callable[[str], Awaitable[tuple[str, float]]]
+        ),
         labels: list[str],
     ) -> None:
         self.fn = fn

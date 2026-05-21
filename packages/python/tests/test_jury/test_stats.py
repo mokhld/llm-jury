@@ -21,9 +21,11 @@ class MockDebateEngine:
         return DebateTranscript(
             input_text=text,
             primary_result=primary_result,
-            rounds=[[
-                PersonaResponse("A", "unsafe", 0.9, "harm", ["harm"]),
-            ]],
+            rounds=[
+                [
+                    PersonaResponse("A", "unsafe", 0.9, "harm", ["harm"]),
+                ]
+            ],
             duration_ms=5,
             total_tokens=10,
             total_cost_usd=0.001,

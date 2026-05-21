@@ -18,7 +18,9 @@ class PersonaResponseSchemaTests(unittest.TestCase):
         self.assertIs(schema["additionalProperties"], False)
         self.assertEqual(
             sorted(schema["required"]),
-            sorted(["label", "confidence", "reasoning", "key_factors", "dissent_notes"]),
+            sorted(
+                ["label", "confidence", "reasoning", "key_factors", "dissent_notes"]
+            ),
         )
 
     def test_label_constrained_to_provided_labels(self) -> None:

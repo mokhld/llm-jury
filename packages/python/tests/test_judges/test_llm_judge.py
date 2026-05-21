@@ -15,10 +15,12 @@ class LLMJudgeTests(unittest.IsolatedAsyncioTestCase):
         transcript = DebateTranscript(
             input_text="text",
             primary_result=ClassificationResult("unknown", 0.4),
-            rounds=[[
-                PersonaResponse("A", "unsafe", 0.9, "harmful", ["harm"]),
-                PersonaResponse("B", "safe", 0.6, "context", ["context"]),
-            ]],
+            rounds=[
+                [
+                    PersonaResponse("A", "unsafe", 0.9, "harmful", ["harm"]),
+                    PersonaResponse("B", "safe", 0.6, "context", ["context"]),
+                ]
+            ],
             duration_ms=10,
             total_tokens=20,
             total_cost_usd=0.001,
@@ -52,15 +54,19 @@ class LLMJudgeTests(unittest.IsolatedAsyncioTestCase):
         transcript = DebateTranscript(
             input_text="text",
             primary_result=ClassificationResult("safe", 0.91),
-            rounds=[[
-                PersonaResponse("A", "unsafe", 0.9, "harmful", ["harm"]),
-            ]],
+            rounds=[
+                [
+                    PersonaResponse("A", "unsafe", 0.9, "harmful", ["harm"]),
+                ]
+            ],
             duration_ms=10,
             total_tokens=20,
             total_cost_usd=0.001,
         )
         client = FakeLLMClient({"judge": FakeLLMReply("not-json")})
-        verdict = await LLMJudge(model="judge", llm_client=client).judge(transcript, ["safe", "unsafe"])
+        verdict = await LLMJudge(model="judge", llm_client=client).judge(
+            transcript, ["safe", "unsafe"]
+        )
         self.assertEqual(verdict.label, "safe")
         self.assertAlmostEqual(verdict.confidence, 0.91)
 
