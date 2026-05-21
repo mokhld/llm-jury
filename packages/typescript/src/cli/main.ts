@@ -7,6 +7,7 @@ import { FunctionClassifier } from "../classifiers/functionAdapter.ts";
 import { HuggingFaceClassifier } from "../classifiers/huggingFaceAdapter.ts";
 import { LLMClassifier } from "../classifiers/llmClassifier.ts";
 import { DebateConfig, DebateMode } from "../debate/engine.ts";
+import { DEFAULT_MODEL } from "../defaults.ts";
 import { BayesianJudge } from "../judges/bayesian.ts";
 import { LLMJudge } from "../judges/llmJudge.ts";
 import { MajorityVoteJudge } from "../judges/majorityVote.ts";
@@ -94,7 +95,7 @@ function applyPersonaModel(personas: Persona[], model: string | null): Persona[]
 function selectJudge(name: string, model: string | null) {
   switch (name.toLowerCase()) {
     case "llm":
-      return new LLMJudge({ model: model ?? "gpt-5-mini" });
+      return new LLMJudge({ model: model ?? DEFAULT_MODEL });
     case "majority":
       return new MajorityVoteJudge();
     case "weighted":
@@ -203,8 +204,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const classifierSpec = parseArg(argv, "--classifier") ?? "function";
   const personasKey = parseArg(argv, "--personas") ?? "content_moderation";
   const judgeKey = parseArg(argv, "--judge") ?? "llm";
-  const judgeModel = parseArg(argv, "--judge-model") ?? "gpt-5-mini";
-  const personaModel = parseArg(argv, "--persona-model") ?? "gpt-5-mini";
+  const judgeModel = parseArg(argv, "--judge-model") ?? DEFAULT_MODEL;
+  const personaModel = parseArg(argv, "--persona-model") ?? DEFAULT_MODEL;
   const rawLabels = parseArg(argv, "--labels");
   const labels = parseLabels(rawLabels, ["safe", "unsafe"]);
   const debateConfig = buildDebateConfig(argv);

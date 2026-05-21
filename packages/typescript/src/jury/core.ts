@@ -103,7 +103,7 @@ export class Jury {
         debateTranscript: null,
         judgeStrategy: "primary_classifier",
         totalDurationMs: Date.now() - start,
-        totalCostUsd: 0,
+        totalCostUsd: primary.costUsd ?? 0,
       });
     }
 
@@ -130,7 +130,7 @@ export class Jury {
         debateTranscript: null,
         judgeStrategy: "cost_guard_pre_flight",
         totalDurationMs: Date.now() - start,
-        totalCostUsd: 0,
+        totalCostUsd: primary.costUsd ?? 0,
       });
     }
 
