@@ -648,6 +648,25 @@ npm test
 npm test
 ```
 
+## Troubleshooting
+
+The most common gotchas across both SDKs. For the full list with code examples, see the per-package READMEs:
+[Python](packages/python/README.md#troubleshooting) · [TypeScript](packages/typescript/README.md#troubleshooting).
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Auth / 401 on first LLM call | `OPENAI_API_KEY` not set, or wrong provider for the model | `export OPENAI_API_KEY=...` or pass an explicit client (`LiteLLMClient(api_key=...)` / `new LiteLLMClient({ apiKey })`) |
+| Verdict label is the first label with `confidence=0` | `LLMClassifier` couldn't parse the model's JSON response (persona path is schema-constrained via F2; classifier path is not yet — audit S3) | Use a model that supports `response_format`; or wrap with `FunctionClassifier` to control parsing yourself |
+| Repeated 429s after retries | Rate-limit budget exhausted; SDK retries 3× exponential but doesn't honour `Retry-After` (R7) | Lower `debate_concurrency` / `debateConcurrency`; use a higher-tier key |
+| `judge_strategy` / `judgeStrategy` is `cost_guard_pre_flight` | Pre-flight estimate exceeded `max_debate_cost_usd` — no debate ran | Raise the cap or lower `max_rounds` |
+| `judge_strategy` / `judgeStrategy` is `cost_guard_primary_fallback` | Actual mid-debate spend hit the cap mid-flight | Same — and note spend can still overshoot by up to one concurrency-batch |
+| Verdict is never escalated even at low confidence | `personas=[]` silently disables escalation (by design) | Pass at least one persona |
+| `total_cost_usd` / `totalCostUsd` is `None` / `undefined` | Python: model not in litellm's pricing table. TypeScript: no built-in cost estimation (no viable npm library) | Python: pin to a known-priced model. TS: inject a custom `llmClient` that fills `costUsd` |
+| TypeScript logs are silent | TS `Jury` defaults to `NOOP_LOGGER` | `new Jury({ ..., logger: console })` |
+| TypeScript hangs ~60s then aborts | Default `timeoutMs = 60_000` | `new LiteLLMClient({ timeoutMs: 30_000 })` |
+
+For known open issues and roadmap, see [`AUDIT.md`](AUDIT.md) (§1 Bugs, §3 Reliability, §9 Prioritised Roadmap).
+
 ## CLI (Secondary)
 
 The product is SDK-first. CLI is provided for batch workflows.
