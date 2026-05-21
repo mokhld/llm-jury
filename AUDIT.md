@@ -147,16 +147,16 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 | # | Gap |
 |---|-----|
-| T1 | Empty `personas` list — `debate()` defends at L91 but never exercised by a test. |
-| T2 | Empty `labels` list — would trigger B3 if it happened. |
+| ~~T1~~ | ~~Empty `personas` list — `debate()` defends at L91 but never exercised by a test.~~ **Fixed** (PR #10): `test_empty_personas_returns_zero_round_transcript` in `tests/test_debate/test_modes.py`. |
+| ~~T2~~ | ~~Empty `labels` list — would trigger B3 if it happened.~~ **Already covered** by `test_llm_classifier_rejects_empty_labels` (+ whitespace + None variants) in `tests/test_classifiers/test_llm_classifier.py`. |
 | T3 | Cascade failures — what if LLM client raises mid-debate? Only mock-based integration test. |
 | T4 | HuggingFace and Sklearn adapters in Python — no unit tests. |
 | T5 | Summarization failure — if the summarization LLM call fails, no test asserts behavior. |
 | T6 | Malformed persona JSON — `_parse_persona_response` handles it but isn't tested with missing `label` / out-of-bounds `confidence`. |
-| T7 | TypeScript: no retry-exhaustion test, no transient-error-detection test, no timeout test. |
-| T8 | TypeScript: no calibration edge cases (empty input, single threshold, NaN). |
-| T9 | TypeScript: no consensus tests for single-persona debate or no-response rounds. |
-| T10 | Race-condition test for `classifyBatch` (B1) — would catch it. |
+| T7 | ~~TypeScript: no retry-exhaustion test, no transient-error-detection test, no timeout test.~~ **Mostly fixed**: retry/transient covered by PR #5 (`isRetryableError` properties + 503-then-success + 400-no-retry). Timeout added in PR #10 (`litellm client aborts a request that exceeds timeoutMs and retries`). Multi-attempt exhaustion still open but lower priority. |
+| ~~T8~~ | ~~TypeScript: no calibration edge cases (empty input, single threshold, NaN).~~ **Fixed** (PR #10): three tests in `tests/calibration/optimizer.test.ts`. |
+| ~~T9~~ | ~~TypeScript: no consensus tests for single-persona debate or no-response rounds.~~ **Fixed** (PR #10): single-persona deliberation + `consensusReached([])` tests in `tests/debate/modes.test.ts`. |
+| ~~T10~~ | ~~Race-condition test for `classifyBatch` (B1) — would catch it.~~ **Already covered** by "classifyBatch preserves order and runs each input exactly once under high concurrency" in `tests/jury/core.test.ts` (50 inputs × concurrency=8, exactly-once + order). |
 
 ---
 
