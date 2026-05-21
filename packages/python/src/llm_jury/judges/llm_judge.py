@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from llm_jury._defaults import DEFAULT_MODEL
 from llm_jury.debate.engine import DebateTranscript
-from llm_jury.llm.client import LLMClient, LiteLLMClient
+from llm_jury.llm.client import LiteLLMClient, LLMClient
 from llm_jury.utils import clamp_confidence, safe_json_parse, strip_markdown_fences
 
 from .base import JudgeStrategy, Verdict
@@ -63,19 +63,23 @@ class LLMJudge(JudgeStrategy):
                 debate_transcript=transcript,
                 judge_strategy="llm_judge_fallback_invalid_json",
                 total_duration_ms=0,  # Jury fills in the full-classify duration.
-                total_cost_usd=(transcript.total_cost_usd or 0.0) + float(payload.get("cost_usd", 0.0) or 0.0),
+                total_cost_usd=(transcript.total_cost_usd or 0.0)
+                + float(payload.get("cost_usd", 0.0) or 0.0),
             )
 
         return Verdict(
             label=str(data.get("label", transcript.primary_result.label)),
-            confidence=clamp_confidence(data.get("confidence", transcript.primary_result.confidence)),
+            confidence=clamp_confidence(
+                data.get("confidence", transcript.primary_result.confidence)
+            ),
             reasoning=str(data.get("reasoning", "LLM judge response.")),
             was_escalated=True,
             primary_result=transcript.primary_result,
             debate_transcript=transcript,
             judge_strategy="llm_judge",
             total_duration_ms=0,  # Jury fills in the full-classify duration.
-            total_cost_usd=(transcript.total_cost_usd or 0.0) + float(payload.get("cost_usd", 0.0) or 0.0),
+            total_cost_usd=(transcript.total_cost_usd or 0.0)
+            + float(payload.get("cost_usd", 0.0) or 0.0),
         )
 
     def _build_prompt(self, transcript, labels: list[str]) -> str:
@@ -86,7 +90,11 @@ class LLMJudge(JudgeStrategy):
         ]
 
         for round_idx, round_responses in enumerate(transcript.rounds):
-            heading = "Initial Expert Opinions" if round_idx == 0 else f"Revised Opinions (Round {round_idx + 1})"
+            heading = (
+                "Initial Expert Opinions"
+                if round_idx == 0
+                else f"Revised Opinions (Round {round_idx + 1})"
+            )
             lines.append(f"\n{heading}:")
             for response in round_responses:
                 lines.append(

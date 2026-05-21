@@ -2,25 +2,30 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import AsyncMock, patch
 
-from tests.helpers import FakeLLMClient, FakeLLMReply
-from llm_jury.classifiers.base import ClassificationResult
 from llm_jury.classifiers.function_adapter import FunctionClassifier
-from llm_jury.debate.engine import DebateConfig, DebateMode, DebateTranscript
+from llm_jury.debate.engine import DebateConfig, DebateMode
 from llm_jury.judges.majority_vote import MajorityVoteJudge
 from llm_jury.jury.core import Jury
-from llm_jury.personas.base import Persona, PersonaResponse
+from llm_jury.personas.base import Persona
+from tests.helpers import FakeLLMClient, FakeLLMReply
 
 
 def _make_persona(name: str = "TestPersona") -> Persona:
-    return Persona(name=name, role="test", system_prompt="You are a test persona.", model="gpt-fake")
+    return Persona(
+        name=name,
+        role="test",
+        system_prompt="You are a test persona.",
+        model="gpt-fake",
+    )
 
 
 class ThresholdBoundaryTests(unittest.IsolatedAsyncioTestCase):
     async def test_confidence_equal_threshold_does_not_escalate(self) -> None:
         threshold = 0.7
-        classifier = FunctionClassifier(lambda _: ("safe", threshold), ["safe", "unsafe"])
+        classifier = FunctionClassifier(
+            lambda _: ("safe", threshold), ["safe", "unsafe"]
+        )
         jury = Jury(classifier=classifier, personas=[], confidence_threshold=threshold)
 
         verdict = await jury.classify("text")

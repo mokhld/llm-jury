@@ -78,7 +78,11 @@ class _SummariserFailureClient:
         self.persona_calls += 1
         # Diverging labels keep the debate going until max_rounds (no early exit).
         label = "safe" if self.persona_calls % 2 == 0 else "unsafe"
-        return {"content": _persona_payload(label=label), "tokens": 10, "cost_usd": 0.001}
+        return {
+            "content": _persona_payload(label=label),
+            "tokens": 10,
+            "cost_usd": 0.001,
+        }
 
 
 class CascadeFailureTests(unittest.IsolatedAsyncioTestCase):
@@ -121,7 +125,9 @@ class CascadeFailureTests(unittest.IsolatedAsyncioTestCase):
         for name in ("A", "C"):
             self.assertAlmostEqual(round2[name].confidence, 0.8)
 
-    async def test_all_personas_failing_on_round_two_still_returns_transcript(self) -> None:
+    async def test_all_personas_failing_on_round_two_still_returns_transcript(
+        self,
+    ) -> None:
         # Round 1 succeeds; round 2 wipes everyone out. Engine must still return
         # a transcript with both rounds populated by fallbacks.
         llm = _CallCountingLLMClient(fail_round_for={"A": {2}, "B": {2}, "C": {2}})

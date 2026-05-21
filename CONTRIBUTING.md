@@ -54,6 +54,28 @@ cd packages/typescript && npm run check
 
 CI runs both suites on every PR across Python 3.10–3.13 + Node 22.
 
+## Linting
+
+Lint is enforced in CI (one dedicated `lint` job, separate from the
+test matrix):
+
+```bash
+# Python — ruff (lint) + black (format check)
+cd packages/python
+uv run ruff check src tests
+uv run black --check src tests   # drop --check to auto-format
+
+# TypeScript — eslint
+cd packages/typescript
+npm run lint
+```
+
+Configs live in `packages/python/pyproject.toml` (`[tool.ruff]`,
+`[tool.black]`) and `packages/typescript/eslint.config.js`. If a
+lint rule fights a deliberate pattern, prefer adjusting the config
+over sprinkling `# noqa` / `eslint-disable` comments — and call
+out the change in the PR.
+
 ## Workflow
 
 1. Open an issue first for non-trivial work so we can align on scope.
@@ -65,14 +87,13 @@ CI runs both suites on every PR across Python 3.10–3.13 + Node 22.
 
 ## Code style
 
-There is no enforced lint tooling in CI today (tracked as audit item
-C1b). Match surrounding style:
+Lint is enforced in CI (see the [Linting](#linting) section above).
+House style on top of what the linters check:
 
-- **Python**: standard 4-space indent, type hints throughout,
-  `from __future__ import annotations` at the top of new modules.
-  Tests use `unittest.IsolatedAsyncioTestCase`.
-- **TypeScript**: 2-space indent, explicit types on public APIs.
-  Imports use `.ts` extensions (Node 22 ESM convention).
+- **Python**: `from __future__ import annotations` at the top of new
+  modules. Tests use `unittest.IsolatedAsyncioTestCase`.
+- **TypeScript**: explicit types on public APIs. Imports use `.ts`
+  extensions (Node 22 ESM convention).
 
 ## Commit messages
 

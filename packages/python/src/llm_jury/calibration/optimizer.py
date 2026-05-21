@@ -55,7 +55,7 @@ class ThresholdCalibrator:
             escalations = 0
             correct = 0
 
-            for result, expected in zip(cached_results, labels):
+            for result, expected in zip(cached_results, labels, strict=True):
                 if result.confidence < threshold:
                     # Item would be escalated — we don't know the jury's
                     # verdict without running it, so treat as unresolved.

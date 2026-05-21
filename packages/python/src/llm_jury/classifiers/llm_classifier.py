@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from llm_jury._defaults import DEFAULT_MODEL
-from llm_jury.llm.client import LLMClient, LiteLLMClient
+from llm_jury.llm.client import LiteLLMClient, LLMClient
 from llm_jury.utils import clamp_confidence, safe_json_parse, strip_markdown_fences
 
 from .base import ClassificationResult, Classifier
@@ -24,7 +24,10 @@ class LLMClassifier(Classifier):
             )
         self.model = model
         self.labels = cleaned
-        self.system_prompt = system_prompt or "Classify the text and return JSON with label and confidence."
+        self.system_prompt = (
+            system_prompt
+            or "Classify the text and return JSON with label and confidence."
+        )
         self.llm_client = llm_client or LiteLLMClient()
         self.temperature = temperature
 
@@ -33,7 +36,7 @@ class LLMClassifier(Classifier):
             "Classify the following text into one of the available labels.\n"
             f"Labels: {', '.join(self.labels) if self.labels else 'any'}\n"
             f"Text: {text}\n"
-            "Respond with JSON: {\"label\":\"...\",\"confidence\":0.0-1.0}."
+            'Respond with JSON: {"label":"...","confidence":0.0-1.0}.'
         )
         payload = await self.llm_client.complete(
             model=self.model,

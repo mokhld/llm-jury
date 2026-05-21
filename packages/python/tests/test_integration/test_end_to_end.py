@@ -13,7 +13,9 @@ from tests.helpers import FakeLLMClient, FakeLLMReply
 
 class EndToEndTests(unittest.IsolatedAsyncioTestCase):
     async def test_pipeline_with_mock_llm(self) -> None:
-        classifier = FunctionClassifier(lambda text: ("unknown", 0.45), ["safe", "unsafe"])
+        classifier = FunctionClassifier(
+            lambda text: ("unknown", 0.45), ["safe", "unsafe"]
+        )
         responses = {
             "Policy Analyst": FakeLLMReply(
                 json.dumps(
