@@ -1,4 +1,5 @@
 import type { ClassificationResult, Classifier } from "./base.ts";
+import { DEFAULT_MODEL } from "../defaults.ts";
 import type { LLMClient } from "../llm/client.ts";
 import { LiteLLMClient } from "../llm/client.ts";
 import { safeJsonObject, stripMarkdown } from "../utils.ts";
@@ -28,7 +29,7 @@ export class LLMClassifier implements Classifier {
           "Pass labels: ['safe', 'unsafe'] (or similar) when constructing.",
       );
     }
-    this.model = options.model ?? "gpt-5-mini";
+    this.model = options.model ?? DEFAULT_MODEL;
     this.labels = cleaned;
     this.systemPrompt =
       options.systemPrompt ?? "Classify the text and return JSON with fields label and confidence.";
@@ -47,11 +48,13 @@ export class LLMClassifier implements Classifier {
     const payload = await this.llmClient.complete(this.model, this.systemPrompt, prompt, this.temperature);
     const parsed = safeJsonObject(stripMarkdown(payload.content));
     const fallbackLabel = this.labels[0] ?? "unknown";
+    const callCost = payload.costUsd ?? null;
     if (!parsed) {
       return {
         label: fallbackLabel,
         confidence: 0,
         rawOutput: { raw_content: payload.content, error: "invalid_json" },
+        costUsd: callCost,
       };
     }
 
@@ -59,6 +62,7 @@ export class LLMClassifier implements Classifier {
       label: String(parsed.label ?? fallbackLabel),
       confidence: Number(parsed.confidence ?? 0),
       rawOutput: parsed,
+      costUsd: callCost,
     };
   }
 

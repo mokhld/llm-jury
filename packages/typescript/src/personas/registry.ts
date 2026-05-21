@@ -1,8 +1,9 @@
+import { DEFAULT_MODEL } from "../defaults.ts";
 import type { Persona } from "./base.ts";
 
 function persona(p: Omit<Persona, "model" | "temperature"> & Partial<Pick<Persona, "model" | "temperature">>): Persona {
   return {
-    model: "gpt-5-mini",
+    model: DEFAULT_MODEL,
     temperature: 0.3,
     ...p,
   };

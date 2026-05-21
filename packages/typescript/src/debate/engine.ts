@@ -1,4 +1,5 @@
 import type { ClassificationResult } from "../classifiers/base.ts";
+import { DEFAULT_MODEL } from "../defaults.ts";
 import { LiteLLMClient } from "../llm/client.ts";
 import type { LLMClient } from "../llm/client.ts";
 import { NOOP_LOGGER } from "../logger.ts";
@@ -460,7 +461,7 @@ export class DebateEngine {
       }
     });
 
-    const model = this.personas[0]?.model ?? "gpt-5-mini";
+    const model = this.personas[0]?.model ?? DEFAULT_MODEL;
     const payload = await this.llmClient.complete(model, SUMMARISATION_PROMPT, parts.join("\n"), 0);
 
     return {
