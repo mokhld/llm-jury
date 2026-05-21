@@ -38,7 +38,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | # | Location | Issue |
 |---|----------|-------|
 | ~~B4~~ | `packages/python/src/llm_jury/jury/core.py` | ~~After `judge.judge()` returns, fields `was_escalated`, `primary_result`, `debate_transcript`, `total_duration_ms` are overwritten **unconditionally**.~~ **Fixed**: Jury now backfills only when the field is at its default/unset value (None for refs, 0 for `total_duration_ms`). `was_escalated` remains Jury-authoritative (Jury knows we escalated). Default judges now emit `total_duration_ms=0` so Jury fills the true full-classify duration. |
-| B5 | `packages/typescript/src/debate/engine.ts:387` | Hardcoded fallback model `"gpt-5-mini"` when `personas` is empty — diverges from Python's `DEFAULT_MODEL` constant. |
+| ~~B5~~ | `packages/typescript/src/debate/engine.ts:387` | ~~Hardcoded fallback model `"gpt-5-mini"` when `personas` is empty — diverges from Python's `DEFAULT_MODEL` constant.~~ **Fixed** (PR #13): new `packages/typescript/src/defaults.ts` exports `DEFAULT_MODEL`; all 7 hardcoded occurrences across the TS codebase (debate engine, judges, classifiers, persona registry, CLI flags) now import the constant. |
 | ~~B6~~ | `packages/typescript/src/judges/llmJudge.ts` | ~~Cost accumulation coerces `null` `totalCostUsd` to `0`, losing actual cost when the field starts nullable.~~ **Fixed**: new `sumCosts(a, b)` helper returns `null` when both inputs are null/undefined (signaling cost tracking unavailable) and otherwise sums with unknowns treated as 0. |
 | B7 | `packages/typescript/src/jury/core.ts:140` | If a `classifyBatch` worker throws, `Promise.all` rejects and the caller gets no partial results — no per-item error handling. |
 | ~~B8~~ | `packages/python/src/llm_jury/llm/client.py` | ~~Tenacity retries on `ConnectionError`/`TimeoutError`/`OSError` only. Does not explicitly retry 429 / 503.~~ **Fixed**: custom `_is_retryable_error` predicate now also retries on litellm typed errors (matched by class name to avoid hard import) and any exception with `status_code` / `http_status` / `status` in {429, 500-599}. |
@@ -115,7 +115,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 |---|------------|
 | A1 | **TypeScript `Verdict` should be a class** with `toJSON()` and `toDict()` methods (parity with Python). `packages/typescript/src/judges/base.ts:4-14` |
 | ~~A2~~ | ~~Extract `fallbackVerdict()` helper in TS — current duplication across `majorityVote.ts:8-19`, `bayesian.ts:15-26`, `weightedVote.ts:8-19`.~~ **Fixed**: new `fallbackVerdict(transcript, judgeStrategy)` exported from `judges/base.ts`; the three judges now delegate to it. Python parallel is `_fallback_verdict()` in `judges/base.py:39-52`. |
-| A3 | Add `cost_usd` to `ClassificationResult` base in TS (Python has it). `packages/typescript/src/classifiers/base.ts` |
+| ~~A3~~ | ~~Add `cost_usd` to `ClassificationResult` base in TS (Python has it). `packages/typescript/src/classifiers/base.ts`~~ **Fixed** (PR #13): added optional `costUsd?: number \| null` to TS `ClassificationResult`; `LLMClassifier` forwards `payload.costUsd`; `Jury` fast-path and pre-flight-skip verdicts use `primary.costUsd ?? 0` instead of hardcoded 0. |
 | A4 | `Persona` in TS should have default `model` / `temperature` like Python's dataclass. |
 | A5 | `Jury` options object is large — consider a builder pattern for both languages, or at least a `JuryConfig.from_preset("content_moderation")` factory. |
 | A6 | Consider a strict-mode flag (`strict_parsing=True`) that surfaces malformed-LLM-response errors instead of silently falling back. |
@@ -187,7 +187,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | ~~C1~~ | ~~`ci.yml` runs tests only — **no lint (ruff/black/eslint), no type-check step** for TS.~~ **Partially fixed**: TS `npm run check` (tsc) is now a CI gate in `.github/workflows/ci.yml`. Lint (ruff/black/eslint) is still open — tracked as **C1b** in §9. |
 | C2 | No dependabot config — supply-chain risk. |
 | C3 | No prerelease / RC channel in `release.yml`. |
-| C4 | No `py.typed` marker → Python type hints aren't exposed to downstream users. Add `packages/python/src/llm_jury/py.typed` and declare in `pyproject.toml [tool.setuptools.package-data]`. |
+| ~~C4~~ | ~~No `py.typed` marker → Python type hints aren't exposed to downstream users.~~ **Fixed** (PR #13): added `packages/python/src/llm_jury/py.typed` and declared in `pyproject.toml [tool.setuptools.package-data]`; verified the marker lands in the built wheel. |
 | C5 | `package.json` (TS) — consider `"sideEffects": false` to help bundlers tree-shake. |
 | C6 | TS package.json `exports` is ESM-only — fine, but document it; some downstream CJS users will be surprised. |
 
@@ -230,10 +230,10 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 - ~~T1–T10: fill test gaps.~~ **All closed** (PR #10, #11, #12). T7 retry-exhaustion subset still open but low priority.
 - D2–D6: governance files.
 - A5: builder / preset factories.
-- C4: `py.typed`.
+- ~~C4: `py.typed`.~~ Closed in PR #13.
 - C1b: lint gates (ruff/black for Python, eslint for TS) — net-new tooling, surfaces unknown fix volume.
-- A3: `cost_usd` on TS `ClassificationResult` base (Python has it).
-- B5: hardcoded `"gpt-5-mini"` fallback in TS `debate/engine.ts:387` diverges from Python's `DEFAULT_MODEL`.
+- ~~A3: `cost_usd` on TS `ClassificationResult` base (Python has it).~~ Closed in PR #13.
+- ~~B5: hardcoded `"gpt-5-mini"` fallback in TS diverges from Python's `DEFAULT_MODEL`.~~ Closed in PR #13.
 
 ### P3 — stretch / production-grade
 
@@ -250,6 +250,8 @@ The original TS-port commit message said "full parity port with native type safe
 - ~~`Verdict` is a `type` not a class~~ → **fixed (P0).**
 - ~~No logging~~ → **fixed (O1).**
 - ~~`classifyBatch` has a correctness bug Python doesn't~~ → **fixed (P0).**
-- `ClassificationResult.cost_usd` is still missing in TS base (audit A3 — open in P2).
+- ~~`ClassificationResult.cost_usd` is still missing in TS base (audit A3)~~ → **fixed (PR #13).**
 - ~~Judge fallback paths duplicated~~ → **fixed (A2).**
-- ~~Hardcoded `"gpt-5-mini"` fallback diverges from Python's `DEFAULT_MODEL`~~ → audit B5, still open.
+- ~~Hardcoded `"gpt-5-mini"` fallback diverges from Python's `DEFAULT_MODEL`~~ → **fixed (PR #13).**
+
+All known parity asymmetries between the two SDKs are now closed.
