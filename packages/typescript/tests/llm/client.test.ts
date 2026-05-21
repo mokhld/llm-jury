@@ -109,6 +109,45 @@ test("litellm client retries 503 then succeeds", async () => {
   }
 });
 
+// T7: timeout test — when fetch hangs past timeoutMs the AbortController must
+// fire, fetch must reject with an AbortError, and withRetry must treat it as
+// retryable so a slow first attempt can recover on the next one.
+test("litellm client aborts a request that exceeds timeoutMs and retries", async () => {
+  let attempts = 0;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+    attempts += 1;
+    if (attempts === 1) {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    }
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "{\"label\":\"safe\",\"confidence\":0.9}" } }],
+          usage: { total_tokens: 5 },
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+
+  try {
+    const client = new LiteLLMClient({ apiKey: "test-key", timeoutMs: 20 });
+    const result = await client.complete("gpt-4o-mini", "system", "prompt", 0);
+    assert.equal(attempts, 2, "first attempt must be aborted; second must succeed");
+    assert.ok(result.content.includes("safe"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("litellm client does NOT retry on 400", async () => {
   let attempts = 0;
   const originalFetch = globalThis.fetch;
