@@ -55,3 +55,15 @@ test("llm classifier falls back on invalid JSON", async () => {
   assert.equal(result.label, "safe");
   assert.equal(result.confidence, 0);
 });
+
+test("llm classifier rejects empty labels", () => {
+  assert.throws(() => new LLMClassifier({ model: "m", labels: [] }), /at least one non-empty label/);
+});
+
+test("llm classifier rejects whitespace-only labels", () => {
+  assert.throws(() => new LLMClassifier({ model: "m", labels: ["", "  "] }), /at least one non-empty label/);
+});
+
+test("llm classifier rejects missing labels option", () => {
+  assert.throws(() => new LLMClassifier({ model: "m" }), /at least one non-empty label/);
+});

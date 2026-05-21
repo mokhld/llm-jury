@@ -16,8 +16,14 @@ class LLMClassifier(Classifier):
         llm_client: LLMClient | None = None,
         temperature: float = 0.0,
     ) -> None:
+        cleaned = [str(label).strip() for label in (labels or []) if str(label).strip()]
+        if not cleaned:
+            raise ValueError(
+                "LLMClassifier requires at least one non-empty label. "
+                "Pass labels=['safe', 'unsafe'] (or similar) when constructing."
+            )
         self.model = model
-        self.labels = labels or []
+        self.labels = cleaned
         self.system_prompt = system_prompt or "Classify the text and return JSON with label and confidence."
         self.llm_client = llm_client or LiteLLMClient()
         self.temperature = temperature

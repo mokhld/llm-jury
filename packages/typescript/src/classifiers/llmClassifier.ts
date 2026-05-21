@@ -19,8 +19,17 @@ export class LLMClassifier implements Classifier {
   private llmClient: LLMClient;
 
   constructor(options: LLMClassifierOptions = {}) {
+    const cleaned = (options.labels ?? [])
+      .map((label) => String(label).trim())
+      .filter((label) => label.length > 0);
+    if (cleaned.length === 0) {
+      throw new Error(
+        "LLMClassifier requires at least one non-empty label. " +
+          "Pass labels: ['safe', 'unsafe'] (or similar) when constructing.",
+      );
+    }
     this.model = options.model ?? "gpt-5-mini";
-    this.labels = options.labels ?? [];
+    this.labels = cleaned;
     this.systemPrompt =
       options.systemPrompt ?? "Classify the text and return JSON with fields label and confidence.";
     this.temperature = options.temperature ?? 0;

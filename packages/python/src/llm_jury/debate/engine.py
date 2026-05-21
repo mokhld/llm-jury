@@ -108,13 +108,19 @@ class DebateEngine:
         elif self.config.mode == DebateMode.SEQUENTIAL:
             responses: list[PersonaResponse] = []
             for persona in self.personas:
-                response = await self._query_persona(
-                    persona=persona,
-                    text=text,
-                    primary_result=primary_result,
-                    labels=labels,
-                    prior_rounds=[responses] if responses else [],
-                )
+                try:
+                    response = await self._query_persona(
+                        persona=persona,
+                        text=text,
+                        primary_result=primary_result,
+                        labels=labels,
+                        prior_rounds=[responses] if responses else [],
+                    )
+                except Exception as exc:  # noqa: BLE001 — degrade gracefully on any persona failure
+                    logger.warning(
+                        "Persona %s failed during sequential debate: %s", persona.name, exc,
+                    )
+                    response = self._failed_persona_response(persona, exc, labels)
                 responses.append(response)
                 total_tokens += response.tokens_used
                 total_cost += float(response.cost_usd or 0.0)
@@ -189,7 +195,11 @@ class DebateEngine:
             async with sem:
                 return await self._query_persona(persona, text, primary_result, labels, prior_rounds)
 
-        return list(await asyncio.gather(*[_wrapped(persona) for persona in self.personas]))
+        results = await asyncio.gather(
+            *[_wrapped(persona) for persona in self.personas],
+            return_exceptions=True,
+        )
+        return self._gather_with_fallback(results, labels)
 
     async def _run_deliberation_round(
         self,
@@ -206,7 +216,42 @@ class DebateEngine:
                     persona, text, primary_result, labels, prior_rounds,
                 )
 
-        return list(await asyncio.gather(*[_wrapped(persona) for persona in self.personas]))
+        results = await asyncio.gather(
+            *[_wrapped(persona) for persona in self.personas],
+            return_exceptions=True,
+        )
+        return self._gather_with_fallback(results, labels)
+
+    def _gather_with_fallback(
+        self,
+        results: list[PersonaResponse | BaseException],
+        labels: list[str],
+    ) -> list[PersonaResponse]:
+        out: list[PersonaResponse] = []
+        for persona, result in zip(self.personas, results):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "Persona %s failed during debate round: %s", persona.name, result,
+                )
+                out.append(self._failed_persona_response(persona, result, labels))
+            else:
+                out.append(result)
+        return out
+
+    @staticmethod
+    def _failed_persona_response(
+        persona: Persona,
+        error: BaseException,
+        labels: list[str],
+    ) -> PersonaResponse:
+        fallback_label = labels[0] if labels else "unknown"
+        return PersonaResponse(
+            persona_name=persona.name,
+            label=fallback_label,
+            confidence=0.0,
+            reasoning=f"Persona call failed: {type(error).__name__}: {error}",
+            key_factors=[],
+        )
 
     # ------------------------------------------------------------------
     # Persona query

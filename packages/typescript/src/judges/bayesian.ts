@@ -1,5 +1,6 @@
 import type { DebateTranscript } from "../debate/engine.ts";
-import type { JudgeStrategy, Verdict } from "./base.ts";
+import { Verdict } from "./base.ts";
+import type { JudgeStrategy } from "./base.ts";
 
 export type PersonaPriors = Record<string, Record<string, number>>;
 
@@ -13,7 +14,7 @@ export class BayesianJudge implements JudgeStrategy {
   async judge(transcript: DebateTranscript, labels: string[]): Promise<Verdict> {
     const finalRound = transcript.rounds[transcript.rounds.length - 1] ?? [];
     if (finalRound.length === 0) {
-      return {
+      return new Verdict({
         label: transcript.primaryResult.label,
         confidence: transcript.primaryResult.confidence,
         reasoning: "No persona responses available. Falling back to primary result.",
@@ -23,7 +24,7 @@ export class BayesianJudge implements JudgeStrategy {
         judgeStrategy: "bayesian",
         totalDurationMs: transcript.durationMs,
         totalCostUsd: transcript.totalCostUsd,
-      };
+      });
     }
 
     const posterior = new Map<string, number>();
@@ -49,7 +50,7 @@ export class BayesianJudge implements JudgeStrategy {
       }
     }
 
-    return {
+    return new Verdict({
       label: winner,
       confidence: winnerScore,
       reasoning: "Bayesian aggregation across persona responses.",
@@ -59,6 +60,6 @@ export class BayesianJudge implements JudgeStrategy {
       judgeStrategy: "bayesian",
       totalDurationMs: transcript.durationMs,
       totalCostUsd: transcript.totalCostUsd,
-    };
+    });
   }
 }

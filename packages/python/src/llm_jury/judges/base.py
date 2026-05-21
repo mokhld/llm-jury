@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 
+from llm_jury._version import __version__
 from llm_jury.classifiers.base import ClassificationResult
 from llm_jury.debate.engine import DebateTranscript
 from llm_jury.utils import json_serializable
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass(slots=True)
@@ -22,6 +28,9 @@ class Verdict:
 
     total_duration_ms: int
     total_cost_usd: float | None
+
+    library_version: str = field(default_factory=lambda: __version__)
+    created_at: str = field(default_factory=_utc_now_iso)
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -68,6 +68,81 @@ class DebateModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(transcript.rounds), 2)
         self.assertIsNotNone(transcript.summary)
 
+    async def test_one_persona_failure_does_not_crash_independent_mode(self) -> None:
+        llm = _FlakyLLMClient(fail_for={"B"})
+        engine = DebateEngine(
+            personas=self.personas,
+            llm_client=llm,
+            config=DebateConfig(mode=DebateMode.INDEPENDENT, max_rounds=1),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        self.assertEqual(len(transcript.rounds[0]), 3)
+        names = [r.persona_name for r in transcript.rounds[0]]
+        self.assertEqual(names, ["A", "B", "C"])
+        failed = next(r for r in transcript.rounds[0] if r.persona_name == "B")
+        self.assertEqual(failed.confidence, 0.0)
+        self.assertIn("Persona call failed", failed.reasoning)
+
+    async def test_one_persona_failure_does_not_crash_sequential_mode(self) -> None:
+        llm = _FlakyLLMClient(fail_for={"B"})
+        engine = DebateEngine(
+            personas=self.personas,
+            llm_client=llm,
+            config=DebateConfig(mode=DebateMode.SEQUENTIAL),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        self.assertEqual(len(transcript.rounds[0]), 3)
+        failed = next(r for r in transcript.rounds[0] if r.persona_name == "B")
+        self.assertIn("Persona call failed", failed.reasoning)
+
+    async def test_one_persona_failure_does_not_crash_deliberation(self) -> None:
+        llm = _FlakyLLMClient(fail_for={"B"})
+        engine = DebateEngine(
+            personas=self.personas,
+            llm_client=llm,
+            config=DebateConfig(mode=DebateMode.DELIBERATION, max_rounds=2),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        # First round still has all three personas (B as fallback)
+        self.assertEqual(len(transcript.rounds[0]), 3)
+        failed = next(r for r in transcript.rounds[0] if r.persona_name == "B")
+        self.assertEqual(failed.confidence, 0.0)
+        self.assertIn("Persona call failed", failed.reasoning)
+
+
+class _FlakyLLMClient:
+    """LLM client that raises only when a target persona makes the call.
+
+    Personas in these tests have system_prompt equal to their name ("A", "B", "C"),
+    so exact-match keeps the flaky behaviour scoped to persona calls and never
+    fires on the summarisation prompt.
+    """
+
+    def __init__(self, fail_for: set[str]) -> None:
+        self.fail_for = fail_for
+
+    async def complete(self, model: str, system_prompt: str, prompt: str, temperature: float = 0.0):
+        if system_prompt in self.fail_for:
+            raise RuntimeError(f"simulated upstream failure for persona {system_prompt}")
+        return {
+            "content": json.dumps(
+                {
+                    "label": "safe",
+                    "confidence": 0.8,
+                    "reasoning": "ok",
+                    "key_factors": ["k"],
+                }
+            ),
+            "tokens": 10,
+            "cost_usd": 0.001,
+        }
+
 
 if __name__ == "__main__":
     unittest.main()
