@@ -1,0 +1,64 @@
+name: Feature request
+description: Suggest a new feature or improvement.
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Before filing, please skim
+        [`AUDIT.md`](../AUDIT.md) §6 (Missing Features) and §9
+        (Prioritised Roadmap) — your idea may already be tracked.
+
+  - type: dropdown
+    id: sdk
+    attributes:
+      label: Which SDK should this land in?
+      options:
+        - Python
+        - TypeScript
+        - Both (parity)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: |
+        Describe the use case first — not the solution. What are you
+        trying to do that the current API makes hard or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        Optional. A sketch of the API or behaviour you'd like.
+        Pseudocode is fine.
+      render: python
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        What did you try first? Why didn't it work?
+    validations:
+      required: false
+
+  - type: input
+    id: audit-ref
+    attributes:
+      label: Related audit item?
+      description: |
+        If this maps to an open item in `AUDIT.md` (e.g. F1, A5, R6),
+        link it here so we can close the loop.
+      placeholder: "F1, R6"
+    validations:
+      required: false
