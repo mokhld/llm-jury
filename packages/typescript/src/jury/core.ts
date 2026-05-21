@@ -6,6 +6,8 @@ import type { Persona } from "../personas/base.ts";
 import { LLMJudge } from "../judges/llmJudge.ts";
 import { Verdict } from "../judges/base.ts";
 import type { JudgeStrategy } from "../judges/base.ts";
+import { NOOP_LOGGER } from "../logger.ts";
+import type { Logger } from "../logger.ts";
 import { createSemaphore } from "../utils.ts";
 
 export type JuryOptions = {
@@ -20,6 +22,7 @@ export type JuryOptions = {
   onEscalation?: (text: string, result: ClassificationResult) => void;
   onVerdict?: (verdict: Verdict) => void;
   llmClient?: LLMClient;
+  logger?: Logger;
 };
 
 export class JuryStats {
@@ -47,20 +50,23 @@ export class Jury {
   maxDebateCostUsd?: number;
   onEscalation?: (text: string, result: ClassificationResult) => void;
   onVerdict?: (verdict: Verdict) => void;
+  logger: Logger;
   private _stats: JuryStats;
 
   constructor(options: JuryOptions) {
     this.classifier = options.classifier;
     this.personas = options.personas;
     this.threshold = options.confidenceThreshold ?? 0.7;
+    this.logger = options.logger ?? NOOP_LOGGER;
     const llmClient = options.llmClient ?? new LiteLLMClient();
-    this.judge = options.judge ?? new LLMJudge({ llmClient });
+    this.judge = options.judge ?? new LLMJudge({ llmClient, logger: this.logger });
     this.debateConfig = options.debateConfig ?? new DebateConfig();
     this.debateEngine = new DebateEngine(
       this.personas,
       this.debateConfig,
       llmClient,
       Math.max(1, options.debateConcurrency ?? 5),
+      this.logger,
     );
     this.escalationOverride = options.escalationOverride;
     this.maxDebateCostUsd = options.maxDebateCostUsd;
@@ -91,6 +97,10 @@ export class Jury {
     }
 
     this._stats.escalated += 1;
+    this.logger.info("[llm-jury] escalating to debate", {
+      label: primary.label,
+      confidence: primary.confidence,
+    });
     this.onEscalation?.(text, primary);
 
     const transcript = await this.debateEngine.debate(
@@ -101,6 +111,10 @@ export class Jury {
     );
 
     if (this.maxDebateCostUsd != null && transcript.totalCostUsd != null && transcript.totalCostUsd > this.maxDebateCostUsd) {
+      this.logger.warn("[llm-jury] debate cost exceeded budget; falling back to primary result", {
+        actualCostUsd: transcript.totalCostUsd,
+        maxDebateCostUsd: this.maxDebateCostUsd,
+      });
       return new Verdict({
         label: primary.label,
         confidence: primary.confidence,

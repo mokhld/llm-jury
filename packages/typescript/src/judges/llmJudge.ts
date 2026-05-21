@@ -3,6 +3,8 @@ import { LiteLLMClient } from "../llm/client.ts";
 import type { DebateTranscript } from "../debate/engine.ts";
 import { Verdict } from "./base.ts";
 import type { JudgeStrategy } from "./base.ts";
+import { NOOP_LOGGER } from "../logger.ts";
+import type { Logger } from "../logger.ts";
 import { stripMarkdown, safeJsonObject } from "../utils.ts";
 
 export type LLMJudgeOptions = {
@@ -10,6 +12,7 @@ export type LLMJudgeOptions = {
   systemPrompt?: string;
   temperature?: number;
   llmClient?: LLMClient;
+  logger?: Logger;
 };
 
 export class LLMJudge implements JudgeStrategy {
@@ -37,12 +40,14 @@ export class LLMJudge implements JudgeStrategy {
   private systemPrompt: string;
   private temperature: number;
   private llmClient: LLMClient;
+  private logger: Logger;
 
   constructor(options: LLMJudgeOptions = {}) {
     this.model = options.model ?? "gpt-5-mini";
     this.systemPrompt = options.systemPrompt ?? LLMJudge.DEFAULT_SYSTEM_PROMPT;
     this.temperature = options.temperature ?? 0;
     this.llmClient = options.llmClient ?? new LiteLLMClient();
+    this.logger = options.logger ?? NOOP_LOGGER;
   }
 
   async judge(transcript: DebateTranscript, labels: string[]): Promise<Verdict> {
@@ -50,6 +55,9 @@ export class LLMJudge implements JudgeStrategy {
     const payload = await this.llmClient.complete(this.model, this.systemPrompt, prompt, this.temperature);
     const parsed = safeJsonObject(stripMarkdown(payload.content));
     if (!parsed) {
+      this.logger.warn("[llm-jury] LLMJudge response was not valid JSON; falling back to primary result", {
+        rawContent: payload.content.slice(0, 500),
+      });
       return new Verdict({
         label: String(transcript.primaryResult.label),
         confidence: Number(transcript.primaryResult.confidence),
