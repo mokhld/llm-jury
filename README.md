@@ -457,8 +457,13 @@ import {
   BayesianJudge,
   ThresholdCalibrator,
   LiteLLMClient,
+  CachingLLMClient,
 } from "@llm-jury/core";
 ```
+
+Wrap the LLM client with `CachingLLMClient` for an opt-in LRU
+response cache keyed on `(model, system_prompt, prompt, temperature,
+response_format)`. See per-package READMEs for usage.
 
 ### `Jury` Options
 

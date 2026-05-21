@@ -328,6 +328,30 @@ Report: `calibrationReport()` returns rows with threshold, accuracy, escalation 
 
 Temperature is automatically omitted for reasoning models (`gpt-5*`, `o1*`, `o3*`).
 
+### Response Cache (`CachingLLMClient`)
+
+Opt-in LRU wrapper around any `LLMClient`. Keyed on
+`(model, systemPrompt, prompt, temperature, responseFormat)`.
+Successful responses only — rejections propagate without being cached.
+
+```ts
+import { CachingLLMClient, Jury, LiteLLMClient } from "@llm-jury/core";
+
+const jury = new Jury({
+  // ...
+  llmClient: new CachingLLMClient(new LiteLLMClient(), {
+    maxSize: 1000,      // LRU cap
+    ttlSeconds: 3600,   // optional; omit for no expiry
+  }),
+});
+```
+
+`hits`, `misses`, and `size` are exposed for introspection. Call
+`clear()` to drop everything. The cache is in-process and per-instance;
+share the `CachingLLMClient` object across `Jury` instances if you want
+a shared cache. Caches at any temperature — if you need fresh
+stochastic samples, don't wrap.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
