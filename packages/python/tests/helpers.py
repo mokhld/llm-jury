@@ -23,6 +23,7 @@ class FakeLLMClient:
         system_prompt: str,
         prompt: str,
         temperature: float = 0.0,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.calls.append(
             {
@@ -30,6 +31,7 @@ class FakeLLMClient:
                 "system_prompt": system_prompt,
                 "prompt": prompt,
                 "temperature": temperature,
+                "response_format": response_format,
             }
         )
 

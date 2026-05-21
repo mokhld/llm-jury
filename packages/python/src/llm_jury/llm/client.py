@@ -48,6 +48,7 @@ class LLMClient(Protocol):
         system_prompt: str,
         prompt: str,
         temperature: float | None = 0.0,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -66,6 +67,7 @@ class LiteLLMClient:
         system_prompt: str,
         prompt: str,
         temperature: float | None = 0.0,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
             from litellm import acompletion, completion_cost  # pragma: no cover
@@ -83,6 +85,8 @@ class LiteLLMClient:
         }
         if _should_send_temperature(model, temperature):
             request["temperature"] = temperature
+        if response_format is not None:
+            request["response_format"] = response_format
 
         response = await acompletion(**request)
         content = response.choices[0].message.content
@@ -109,6 +113,7 @@ class NoopLLMClient:
         system_prompt: str,
         prompt: str,
         temperature: float | None = 0.0,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         raise RuntimeError("No llm_client configured.")
 

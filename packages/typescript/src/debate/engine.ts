@@ -4,6 +4,7 @@ import type { LLMClient } from "../llm/client.ts";
 import { NOOP_LOGGER } from "../logger.ts";
 import type { Logger } from "../logger.ts";
 import type { Persona, PersonaResponse } from "../personas/base.ts";
+import { buildPersonaResponseSchema } from "../personas/schema.ts";
 import { stripMarkdown } from "../utils.ts";
 
 const SUMMARISATION_PROMPT =
@@ -309,7 +310,8 @@ export class DebateEngine {
     priorRounds: PersonaResponse[][],
   ): Promise<PersonaResponse> {
     const prompt = this.buildPersonaPrompt(persona, text, primaryResult, labels, priorRounds);
-    const payload = await this.llmClient.complete(persona.model, persona.systemPrompt, prompt, persona.temperature);
+    const schema = buildPersonaResponseSchema(labels) as unknown as Record<string, unknown>;
+    const payload = await this.llmClient.complete(persona.model, persona.systemPrompt, prompt, persona.temperature, schema);
     const parsed = this.parsePersonaResponse(payload.content, persona.name);
     parsed.rawResponse = payload.content;
     parsed.tokensUsed = Number(payload.tokens ?? 0);
@@ -325,7 +327,8 @@ export class DebateEngine {
     priorRounds: PersonaResponse[][],
   ): Promise<PersonaResponse> {
     const prompt = this.buildDeliberationPrompt(persona, text, primaryResult, labels, priorRounds);
-    const payload = await this.llmClient.complete(persona.model, persona.systemPrompt, prompt, persona.temperature);
+    const schema = buildPersonaResponseSchema(labels) as unknown as Record<string, unknown>;
+    const payload = await this.llmClient.complete(persona.model, persona.systemPrompt, prompt, persona.temperature, schema);
     const parsed = this.parsePersonaResponse(payload.content, persona.name);
     parsed.rawResponse = payload.content;
     parsed.tokensUsed = Number(payload.tokens ?? 0);
@@ -459,25 +462,20 @@ export class DebateEngine {
   }
 
   parsePersonaResponse(raw: string, personaName: string): PersonaResponse {
-    let parsed: {
+    type ParsedPersonaPayload = {
       label?: string;
       confidence?: number;
       reasoning?: string;
       key_factors?: string[];
-      dissent_notes?: string;
+      dissent_notes?: string | null;
     };
+    let parsed: ParsedPersonaPayload;
     try {
       const candidate = JSON.parse(stripMarkdown(raw)) as unknown;
       if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
         throw new Error("Persona response must be a JSON object.");
       }
-      parsed = candidate as {
-        label?: string;
-        confidence?: number;
-        reasoning?: string;
-        key_factors?: string[];
-        dissent_notes?: string;
-      };
+      parsed = candidate as ParsedPersonaPayload;
     } catch {
       return {
         personaName,
@@ -494,7 +492,7 @@ export class DebateEngine {
       confidence: Number(parsed.confidence ?? 0),
       reasoning: String(parsed.reasoning ?? ""),
       keyFactors: Array.isArray(parsed.key_factors) ? parsed.key_factors.map(String) : [],
-      dissentNotes: parsed.dissent_notes,
+      dissentNotes: parsed.dissent_notes == null ? undefined : String(parsed.dissent_notes),
       tokensUsed: 0,
       costUsd: 0,
     };

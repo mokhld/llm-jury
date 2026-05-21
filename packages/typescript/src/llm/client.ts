@@ -7,6 +7,7 @@ export interface LLMClient {
     systemPrompt: string,
     prompt: string,
     temperature?: number,
+    responseFormat?: Record<string, unknown>,
   ): Promise<{ content: string; tokens?: number; costUsd?: number }>;
 }
 
@@ -85,6 +86,7 @@ export class LiteLLMClient implements LLMClient {
     systemPrompt: string,
     prompt: string,
     temperature = 0,
+    responseFormat?: Record<string, unknown>,
   ): Promise<{ content: string; tokens?: number; costUsd?: number }> {
     if (!this.apiKey) {
       throw new Error(
@@ -96,6 +98,7 @@ export class LiteLLMClient implements LLMClient {
       model: string;
       messages: Array<{ role: "system" | "user"; content: string }>;
       temperature?: number;
+      response_format?: Record<string, unknown>;
     } = {
       model,
       messages: [
@@ -106,6 +109,9 @@ export class LiteLLMClient implements LLMClient {
 
     if (shouldSendTemperature(model, temperature)) {
       body.temperature = temperature;
+    }
+    if (responseFormat) {
+      body.response_format = responseFormat;
     }
 
     return withRetry(async () => {
