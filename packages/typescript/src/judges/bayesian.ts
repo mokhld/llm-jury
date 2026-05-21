@@ -1,5 +1,5 @@
 import type { DebateTranscript } from "../debate/engine.ts";
-import { Verdict } from "./base.ts";
+import { Verdict, fallbackVerdict } from "./base.ts";
 import type { JudgeStrategy } from "./base.ts";
 
 export type PersonaPriors = Record<string, Record<string, number>>;
@@ -14,17 +14,7 @@ export class BayesianJudge implements JudgeStrategy {
   async judge(transcript: DebateTranscript, labels: string[]): Promise<Verdict> {
     const finalRound = transcript.rounds[transcript.rounds.length - 1] ?? [];
     if (finalRound.length === 0) {
-      return new Verdict({
-        label: transcript.primaryResult.label,
-        confidence: transcript.primaryResult.confidence,
-        reasoning: "No persona responses available. Falling back to primary result.",
-        wasEscalated: true,
-        primaryResult: transcript.primaryResult,
-        debateTranscript: transcript,
-        judgeStrategy: "bayesian",
-        totalDurationMs: transcript.durationMs,
-        totalCostUsd: transcript.totalCostUsd,
-      });
+      return fallbackVerdict(transcript, "bayesian");
     }
 
     const posterior = new Map<string, number>();
