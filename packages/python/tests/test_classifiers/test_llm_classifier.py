@@ -43,6 +43,18 @@ class LLMClassifierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.label, "safe")
         self.assertEqual(result.confidence, 0.0)
 
+    def test_llm_classifier_rejects_empty_labels(self) -> None:
+        with self.assertRaises(ValueError):
+            LLMClassifier(model="m", labels=[])
+
+    def test_llm_classifier_rejects_whitespace_only_labels(self) -> None:
+        with self.assertRaises(ValueError):
+            LLMClassifier(model="m", labels=["", "  "])
+
+    def test_llm_classifier_rejects_none_labels(self) -> None:
+        with self.assertRaises(ValueError):
+            LLMClassifier(model="m")
+
 
 if __name__ == "__main__":
     unittest.main()

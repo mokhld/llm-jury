@@ -1,12 +1,13 @@
 import type { DebateTranscript } from "../debate/engine.ts";
-import type { JudgeStrategy, Verdict } from "./base.ts";
+import { Verdict } from "./base.ts";
+import type { JudgeStrategy } from "./base.ts";
 
 export class MajorityVoteJudge implements JudgeStrategy {
   async judge(transcript: DebateTranscript, _labels: string[]): Promise<Verdict> {
     const finalRound = transcript.rounds[transcript.rounds.length - 1] ?? [];
 
     if (finalRound.length === 0) {
-      return {
+      return new Verdict({
         label: transcript.primaryResult.label,
         confidence: transcript.primaryResult.confidence,
         reasoning: "No persona responses available. Falling back to primary result.",
@@ -16,7 +17,7 @@ export class MajorityVoteJudge implements JudgeStrategy {
         judgeStrategy: "majority_vote",
         totalDurationMs: transcript.durationMs,
         totalCostUsd: transcript.totalCostUsd,
-      };
+      });
     }
 
     const counts = new Map<string, number>();
@@ -38,7 +39,7 @@ export class MajorityVoteJudge implements JudgeStrategy {
       .map((response) => response.reasoning)
       .join(" ");
 
-    return {
+    return new Verdict({
       label: winner,
       confidence: winnerCount / finalRound.length,
       reasoning: reasoning || "Majority vote selected the winner.",
@@ -48,6 +49,6 @@ export class MajorityVoteJudge implements JudgeStrategy {
       judgeStrategy: "majority_vote",
       totalDurationMs: transcript.durationMs,
       totalCostUsd: transcript.totalCostUsd,
-    };
+    });
   }
 }

@@ -4,7 +4,9 @@ import { LiteLLMClient } from "../llm/client.ts";
 import type { LLMClient } from "../llm/client.ts";
 import type { Persona } from "../personas/base.ts";
 import { LLMJudge } from "../judges/llmJudge.ts";
-import type { JudgeStrategy, Verdict } from "../judges/base.ts";
+import { Verdict } from "../judges/base.ts";
+import type { JudgeStrategy } from "../judges/base.ts";
+import { createSemaphore } from "../utils.ts";
 
 export type JuryOptions = {
   classifier: Classifier;
@@ -75,7 +77,7 @@ export class Jury {
     const shouldEscalate = this.shouldEscalate(primary) && this.personas.length > 0;
     if (!shouldEscalate) {
       this._stats.fastPath += 1;
-      return {
+      return new Verdict({
         label: primary.label,
         confidence: primary.confidence,
         reasoning: "Classified by primary classifier with sufficient confidence.",
@@ -85,7 +87,7 @@ export class Jury {
         judgeStrategy: "primary_classifier",
         totalDurationMs: Date.now() - start,
         totalCostUsd: 0,
-      };
+      });
     }
 
     this._stats.escalated += 1;
@@ -99,7 +101,7 @@ export class Jury {
     );
 
     if (this.maxDebateCostUsd != null && transcript.totalCostUsd != null && transcript.totalCostUsd > this.maxDebateCostUsd) {
-      return {
+      return new Verdict({
         label: primary.label,
         confidence: primary.confidence,
         reasoning: "Debate exceeded maxDebateCostUsd. Returning primary classifier result.",
@@ -109,7 +111,7 @@ export class Jury {
         judgeStrategy: "cost_guard_primary_fallback",
         totalDurationMs: Date.now() - start,
         totalCostUsd: transcript.totalCostUsd,
-      };
+      });
     }
 
     const verdict = await this.judge.judge(transcript, this.classifier.labels);
@@ -126,23 +128,17 @@ export class Jury {
   }
 
   async classifyBatch(texts: string[], concurrency = 10): Promise<Verdict[]> {
-    const limit = Math.max(1, concurrency);
-    const results = new Array<Verdict>(texts.length);
-    let cursor = 0;
-
-    const workers = new Array(Math.min(limit, texts.length)).fill(null).map(async () => {
-      while (true) {
-        const index = cursor;
-        cursor += 1;
-        if (index >= texts.length) {
-          break;
+    const semaphore = createSemaphore(Math.max(1, concurrency));
+    return Promise.all(
+      texts.map(async (text) => {
+        await semaphore.acquire();
+        try {
+          return await this.classify(text);
+        } finally {
+          semaphore.release();
         }
-        results[index] = await this.classify(texts[index]!);
-      }
-    });
-
-    await Promise.all(workers);
-    return results;
+      }),
+    );
   }
 
   shouldEscalate(result: ClassificationResult): boolean {

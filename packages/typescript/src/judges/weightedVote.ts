@@ -1,12 +1,13 @@
 import type { DebateTranscript } from "../debate/engine.ts";
-import type { JudgeStrategy, Verdict } from "./base.ts";
+import { Verdict } from "./base.ts";
+import type { JudgeStrategy } from "./base.ts";
 
 export class WeightedVoteJudge implements JudgeStrategy {
   async judge(transcript: DebateTranscript, _labels: string[]): Promise<Verdict> {
     const finalRound = transcript.rounds[transcript.rounds.length - 1] ?? [];
 
     if (finalRound.length === 0) {
-      return {
+      return new Verdict({
         label: transcript.primaryResult.label,
         confidence: transcript.primaryResult.confidence,
         reasoning: "No persona responses available. Falling back to primary result.",
@@ -16,7 +17,7 @@ export class WeightedVoteJudge implements JudgeStrategy {
         judgeStrategy: "weighted_vote",
         totalDurationMs: transcript.durationMs,
         totalCostUsd: transcript.totalCostUsd,
-      };
+      });
     }
 
     const scores = new Map<string, number>();
@@ -34,7 +35,7 @@ export class WeightedVoteJudge implements JudgeStrategy {
     }
 
     const total = Array.from(scores.values()).reduce((a, b) => a + b, 0) || 1;
-    return {
+    return new Verdict({
       label: winner,
       confidence: bestScore / total,
       reasoning: "Weighted vote based on persona confidence scores.",
@@ -44,6 +45,6 @@ export class WeightedVoteJudge implements JudgeStrategy {
       judgeStrategy: "weighted_vote",
       totalDurationMs: transcript.durationMs,
       totalCostUsd: transcript.totalCostUsd,
-    };
+    });
   }
 }

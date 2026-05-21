@@ -122,13 +122,18 @@ export class DebateEngine {
     } else if (this.config.mode === DebateMode.SEQUENTIAL) {
       const responses: PersonaResponse[] = [];
       for (const persona of this.personas) {
-        const response = await this.queryPersona(
-          persona,
-          text,
-          primaryResult,
-          labels,
-          responses.length > 0 ? [responses] : [],
-        );
+        let response: PersonaResponse;
+        try {
+          response = await this.queryPersona(
+            persona,
+            text,
+            primaryResult,
+            labels,
+            responses.length > 0 ? [responses] : [],
+          );
+        } catch (err) {
+          response = this.failedPersonaResponse(persona, err, labels);
+        }
         responses.push(response);
         totalTokens += Number(response.tokensUsed ?? 0);
         totalCostUsd += Number(response.costUsd ?? 0);
@@ -210,10 +215,17 @@ export class DebateEngine {
     const out: PersonaResponse[] = [];
     for (let i = 0; i < this.personas.length; i += this.concurrency) {
       const batch = this.personas.slice(i, i + this.concurrency);
-      const responses = await Promise.all(
+      const settled = await Promise.allSettled(
         batch.map((persona) => this.queryPersona(persona, text, primaryResult, labels, priorRounds)),
       );
-      out.push(...responses);
+      settled.forEach((result, idx) => {
+        const persona = batch[idx]!;
+        if (result.status === "fulfilled") {
+          out.push(result.value);
+        } else {
+          out.push(this.failedPersonaResponse(persona, result.reason, labels));
+        }
+      });
     }
     return out;
   }
@@ -227,14 +239,37 @@ export class DebateEngine {
     const out: PersonaResponse[] = [];
     for (let i = 0; i < this.personas.length; i += this.concurrency) {
       const batch = this.personas.slice(i, i + this.concurrency);
-      const responses = await Promise.all(
+      const settled = await Promise.allSettled(
         batch.map((persona) =>
           this.queryPersonaDeliberation(persona, text, primaryResult, labels, priorRounds),
         ),
       );
-      out.push(...responses);
+      settled.forEach((result, idx) => {
+        const persona = batch[idx]!;
+        if (result.status === "fulfilled") {
+          out.push(result.value);
+        } else {
+          out.push(this.failedPersonaResponse(persona, result.reason, labels));
+        }
+      });
     }
     return out;
+  }
+
+  failedPersonaResponse(persona: Persona, error: unknown, labels: string[]): PersonaResponse {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    if (typeof console !== "undefined") {
+      console.warn(`[llm-jury] persona ${persona.name} failed during debate: ${message}`);
+    }
+    return {
+      personaName: persona.name,
+      label: labels[0] ?? "unknown",
+      confidence: 0,
+      reasoning: `Persona call failed: ${message}`,
+      keyFactors: [],
+      tokensUsed: 0,
+      costUsd: 0,
+    };
   }
 
   async queryPersona(

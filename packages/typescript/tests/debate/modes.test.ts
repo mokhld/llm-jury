@@ -52,3 +52,53 @@ test("adversarial mode assigns prosecution and defense roles", async () => {
   assert.match(promptA, /Prosecution/);
   assert.match(promptB, /Defense/);
 });
+
+class FlakyLLMClient {
+  failFor: Set<string>;
+  constructor(failFor: Set<string>) {
+    this.failFor = failFor;
+  }
+  async complete(_model: string, systemPrompt: string, _prompt: string, _temperature = 0) {
+    if (this.failFor.has(systemPrompt)) {
+      throw new Error(`simulated upstream failure for persona ${systemPrompt}`);
+    }
+    return {
+      content: JSON.stringify({ label: "safe", confidence: 0.8, reasoning: "ok", key_factors: ["k"] }),
+      tokens: 10,
+      costUsd: 0.001,
+    };
+  }
+}
+
+test("one persona failure does not crash independent mode", async () => {
+  const llm = new FlakyLLMClient(new Set(["B"]));
+  const engine = new DebateEngine(personas, new DebateConfig({ mode: DebateMode.INDEPENDENT }), llm);
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
+
+  assert.equal(transcript.rounds[0].length, 3);
+  assert.deepEqual(transcript.rounds[0].map((r) => r.personaName), ["A", "B", "C"]);
+  const failed = transcript.rounds[0].find((r) => r.personaName === "B")!;
+  assert.equal(failed.confidence, 0);
+  assert.match(failed.reasoning, /Persona call failed/);
+});
+
+test("one persona failure does not crash sequential mode", async () => {
+  const llm = new FlakyLLMClient(new Set(["B"]));
+  const engine = new DebateEngine(personas, new DebateConfig({ mode: DebateMode.SEQUENTIAL }), llm);
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
+
+  assert.equal(transcript.rounds[0].length, 3);
+  const failed = transcript.rounds[0].find((r) => r.personaName === "B")!;
+  assert.match(failed.reasoning, /Persona call failed/);
+});
+
+test("one persona failure does not crash deliberation mode", async () => {
+  const llm = new FlakyLLMClient(new Set(["B"]));
+  const engine = new DebateEngine(personas, new DebateConfig({ mode: DebateMode.DELIBERATION, maxRounds: 2 }), llm);
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
+
+  assert.equal(transcript.rounds[0].length, 3);
+  const failed = transcript.rounds[0].find((r) => r.personaName === "B")!;
+  assert.equal(failed.confidence, 0);
+  assert.match(failed.reasoning, /Persona call failed/);
+});

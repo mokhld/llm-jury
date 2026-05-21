@@ -60,6 +60,32 @@ test("classifyBatch preserves input order", async () => {
   );
 });
 
+test("classifyBatch preserves order and runs each input exactly once under high concurrency", async () => {
+  const inputs = Array.from({ length: 50 }, (_, i) => `item-${i}`);
+  const callCounts = new Map<string, number>();
+  let concurrentNow = 0;
+  let peakConcurrency = 0;
+
+  const classifier = new FunctionClassifier(async (text: string) => {
+    callCounts.set(text, (callCounts.get(text) ?? 0) + 1);
+    concurrentNow += 1;
+    peakConcurrency = Math.max(peakConcurrency, concurrentNow);
+    await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 5)));
+    concurrentNow -= 1;
+    return [text, 0.99];
+  }, inputs);
+
+  const jury = new Jury({ classifier, personas: [], confidenceThreshold: 0.7 });
+  const verdicts = await jury.classifyBatch(inputs, 8);
+
+  assert.deepEqual(verdicts.map((v) => v.label), inputs, "output order must match input order");
+  for (const text of inputs) {
+    assert.equal(callCounts.get(text), 1, `each input classified exactly once (${text})`);
+  }
+  assert.ok(peakConcurrency <= 8, `peak concurrency (${peakConcurrency}) must not exceed limit`);
+  assert.ok(peakConcurrency >= 2, `peak concurrency (${peakConcurrency}) should exceed 1 to prove parallelism`);
+});
+
 test("escalation override can force fast-path", async () => {
   const classifier = new FunctionClassifier(() => ["unsafe", 0.1], ["safe", "unsafe"]);
   const jury = new Jury({

@@ -1,7 +1,8 @@
 import type { LLMClient } from "../llm/client.ts";
 import { LiteLLMClient } from "../llm/client.ts";
 import type { DebateTranscript } from "../debate/engine.ts";
-import type { JudgeStrategy, Verdict } from "./base.ts";
+import { Verdict } from "./base.ts";
+import type { JudgeStrategy } from "./base.ts";
 import { stripMarkdown, safeJsonObject } from "../utils.ts";
 
 export type LLMJudgeOptions = {
@@ -49,7 +50,7 @@ export class LLMJudge implements JudgeStrategy {
     const payload = await this.llmClient.complete(this.model, this.systemPrompt, prompt, this.temperature);
     const parsed = safeJsonObject(stripMarkdown(payload.content));
     if (!parsed) {
-      return {
+      return new Verdict({
         label: String(transcript.primaryResult.label),
         confidence: Number(transcript.primaryResult.confidence),
         reasoning: "LLM judge response was not valid JSON. Falling back to primary result.",
@@ -59,10 +60,10 @@ export class LLMJudge implements JudgeStrategy {
         judgeStrategy: "llm_judge_fallback_invalid_json",
         totalDurationMs: transcript.durationMs,
         totalCostUsd: Number(transcript.totalCostUsd ?? 0) + Number(payload.costUsd ?? 0),
-      };
+      });
     }
 
-    return {
+    return new Verdict({
       label: String(parsed.label ?? transcript.primaryResult.label),
       confidence: Number(parsed.confidence ?? transcript.primaryResult.confidence),
       reasoning: String(parsed.reasoning ?? "LLM judge response."),
@@ -72,7 +73,7 @@ export class LLMJudge implements JudgeStrategy {
       judgeStrategy: "llm_judge",
       totalDurationMs: transcript.durationMs,
       totalCostUsd: Number(transcript.totalCostUsd ?? 0) + Number(payload.costUsd ?? 0),
-    };
+    });
   }
 
   buildPrompt(transcript: DebateTranscript, labels: string[]): string {
