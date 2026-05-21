@@ -50,6 +50,12 @@ class DebateConfig:
     max_rounds: int = 2
     include_primary_result: bool = True
     include_confidence: bool = True
+    # F7: optional high-confidence early stop for the DELIBERATION
+    # debate loop. When set, the loop also exits when the MIN
+    # persona confidence in a round is >= this threshold, even if
+    # personas disagree on label. None disables (default behaviour:
+    # only unanimous-label consensus halts early).
+    early_stop_min_confidence: float | None = None
 
 
 @dataclass(slots=True)
@@ -533,5 +539,18 @@ class DebateEngine:
         )
 
     def _consensus_reached(self, round_responses: list[PersonaResponse]) -> bool:
+        if not round_responses:
+            return False
         labels = [response.label for response in round_responses]
-        return bool(labels) and len(set(labels)) == 1
+        if len(set(labels)) == 1:
+            return True
+        # F7: high-confidence early stop. When every persona this
+        # round is highly confident in its own answer, further
+        # deliberation rarely changes the verdict — let the judge
+        # break the tie now instead of paying for another round.
+        threshold = self.config.early_stop_min_confidence
+        if threshold is not None:
+            min_confidence = min(r.confidence for r in round_responses)
+            if min_confidence >= threshold:
+                return True
+        return False

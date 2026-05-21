@@ -88,7 +88,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | ~~R2~~ | ~~Cost budget checked **after** debate completes — actual cost can exceed cap by an entire round.~~ **Fixed**: pre-flight estimate (`estimated_cost_per_persona_usd` × N × max_rounds) refuses the debate when it would obviously blow the cap (`judge_strategy="cost_guard_pre_flight"`). TS `runRound`/`runDeliberationRound` also halt between concurrency-batches once the cap is exceeded. Known limitation: in-flight LiteLLM calls aren't reliably cancellable, so the cap can still be overshot by up to one concurrency-batch worth of spend. | `jury/core.py:106-128`, `jury/core.ts:113-126`, `debate/engine.ts:225-258` |
 | R3 | No hard `max_tokens` on LLM calls — long transcripts can blow context and cost. | `llm/client.py`, `llm/client.ts` |
 | R4 | TypeScript timeout hardcoded to 60s. | `llm/client.ts:82` |
-| R5 | Consensus check uses label equality only — doesn't consider confidence; entropy-based early stop would cut cost. | `debate/engine.py:434` |
+| ~~R5~~ | ~~Consensus check uses label equality only — doesn't consider confidence; entropy-based early stop would cut cost.~~ **Fixed** (F7): `DebateConfig.early_stop_min_confidence` / `earlyStopMinConfidence` adds an opt-in confidence-based early stop alongside the existing label-unanimity check. Min-confidence semantics (every persona must clear the bar). | `debate/engine.py:_consensus_reached`, `debate/engine.ts:consensusReached` |
 | ~~R6~~ | ~~No response cache. Identical `(model, prompt)` → re-queried every time.~~ **Fixed** (F3): opt-in `CachingLLMClient` wrapper exposed from both SDKs. LRU with optional TTL, keyed on `(model, system_prompt, prompt, temperature, response_format)`. Successful responses only. | global |
 | R7 | 429s and 5xx now trigger retry (B8/B9), but the `Retry-After` server hint is still ignored — backoff is purely exponential. | `llm/client.py`, `llm/client.ts` |
 | R8 | `classify_batch` builds all coroutines up-front — memory spike at 100k+ items. | `jury/core.py:130-137` |
@@ -135,7 +135,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | ~~F4~~ | ~~**Cost pre-estimate** — before running a debate, estimate `N_personas × M_rounds × avg_tokens × $/tok` so users can decide.~~ **Fixed**: `Jury.estimated_max_debate_cost_usd` property already exposed `N × max_rounds × estimated_cost_per_persona_usd` (landed alongside R2). F4 adds an `on_cost_estimate(estimate_usd, text) -> bool \| None` callback that fires immediately before a debate would run; returning `False` short-circuits with `judge_strategy="cost_guard_user_override"`. Lets users layer per-tenant budgets and policy gates on top of the hard `max_debate_cost_usd` cap. Token-counted estimates (avg_tokens × $/tok) are still future work — needs a TS pricing table (same R2 / cost-tracking gap). |
 | F5 | **Verdict replay** — given a captured provenance block, replay deterministically (requires O2). |
 | F6 | **Async callbacks / webhooks** — emit a verdict to Kafka / HTTP endpoint when ready. |
-| F7 | **Entropy-based early-stop** in debate — if confidence > 0.95 across personas, exit before `max_rounds`. |
+| ~~F7~~ | ~~**Entropy-based early-stop** in debate — if confidence > 0.95 across personas, exit before `max_rounds`.~~ **Fixed**: opt-in `DebateConfig.early_stop_min_confidence` / `earlyStopMinConfidence`. Halts the deliberation loop early when the **minimum** per-round persona confidence clears the threshold, even on split labels (`debate/engine.py:_consensus_reached`, `debate/engine.ts:consensusReached`). The original label-unanimity check still fires regardless. |
 | F8 | **Persona ensembles vs. routing** — allow a "router" mode that picks 1 of N personas based on input topic instead of running all. |
 | F9 | **Tracing / OpenTelemetry hooks.** |
 | F10 | **Audit-log exporter** (JSONL / parquet) — see O6. |
@@ -227,7 +227,8 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 ### P2 — quality polish
 
 - ~~F3 (cache)~~ **closed**: `CachingLLMClient` shipped in both SDKs (opt-in LRU + optional TTL).
-- ~~F4 (cost pre-estimate)~~ **closed**: `on_cost_estimate` / `onCostEstimate` callback in both SDKs, plus the existing public `estimated_max_debate_cost_usd` property. F7 (entropy early stop) still open.
+- ~~F4 (cost pre-estimate)~~ **closed**: `on_cost_estimate` / `onCostEstimate` callback in both SDKs, plus the existing public `estimated_max_debate_cost_usd` property.
+- ~~F7 (entropy early stop)~~ **closed**: opt-in `DebateConfig.early_stop_min_confidence` / `earlyStopMinConfidence` in both SDKs. Closes R5 as well.
 - ~~T1–T10: fill test gaps.~~ **All closed** (PR #10, #11, #12). T7 retry-exhaustion subset still open but low priority.
 - ~~D2–D6: governance files.~~ **Closed**: `CONTRIBUTING.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, and `.github/ISSUE_TEMPLATE/` (bug + feature + config) all landed.
 - ~~D7: troubleshooting section in any README.~~ **Closed**: tables in root + both package READMEs.
