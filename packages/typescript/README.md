@@ -328,6 +328,19 @@ Report: `calibrationReport()` returns rows with threshold, accuracy, escalation 
 
 Temperature is automatically omitted for reasoning models (`gpt-5*`, `o1*`, `o3*`).
 
+## Examples
+
+Runnable examples live in `examples/typescript/` at the repo root (require `OPENAI_API_KEY` except `threshold_calibration`):
+
+```bash
+node --experimental-strip-types examples/typescript/content_moderation.ts
+node --experimental-strip-types examples/typescript/custom_personas.ts
+node --experimental-strip-types examples/typescript/legal_compliance.ts
+node --experimental-strip-types examples/typescript/threshold_calibration.ts
+```
+
+Each example imports from `@llm-jury/core` to mirror real user code — `npm install @llm-jury/core` in your project first, or `npm link` the local package when running directly from a clone.
+
 ## Testing
 
 ```bash
