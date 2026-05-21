@@ -140,3 +140,40 @@ test("consensusReached returns false for an empty round (no-response branch)", (
   const engine = new DebateEngine(personas, new DebateConfig({ mode: DebateMode.DELIBERATION }), new FakeLLMClient());
   assert.equal(engine.consensusReached([]), false);
 });
+
+// T5: summariser failure must not crash the verdict — persona rounds are
+// load-bearing, the synthesis is best-effort.
+class SummariserFailureClient {
+  personaCalls = 0;
+  summariserCalls = 0;
+  async complete(_model: string, systemPrompt: string, _prompt: string, _temperature = 0) {
+    if (systemPrompt.startsWith("You are a neutral summarisation agent")) {
+      this.summariserCalls += 1;
+      throw new Error("summariser is unavailable");
+    }
+    this.personaCalls += 1;
+    return {
+      content: JSON.stringify({ label: "safe", confidence: 0.8, reasoning: "ok", key_factors: ["k"] }),
+      tokens: 10,
+      costUsd: 0.001,
+    };
+  }
+}
+
+test("debate completes when summariser raises (T5)", async () => {
+  const llm = new SummariserFailureClient();
+  const engine = new DebateEngine(
+    personas,
+    new DebateConfig({ mode: DebateMode.DELIBERATION, maxRounds: 2 }),
+    llm,
+  );
+
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
+
+  assert.equal(transcript.rounds.length, 2);
+  for (const round of transcript.rounds) {
+    assert.equal(round.length, 3);
+  }
+  assert.equal(llm.summariserCalls, 1, "summariser was invoked and failed");
+  assert.equal(transcript.summary, undefined, "summary must be absent, not crashy");
+});
