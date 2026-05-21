@@ -36,6 +36,9 @@ jobs:
       - name: Install dependencies
         working-directory: packages/typescript
         run: npm install
+      - name: Type-check (tsc)
+        working-directory: packages/typescript
+        run: npm run check
       - name: Run tests
         working-directory: packages/typescript
         run: npm test

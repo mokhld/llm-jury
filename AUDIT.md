@@ -114,7 +114,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | # | Improvement |
 |---|------------|
 | A1 | **TypeScript `Verdict` should be a class** with `toJSON()` and `toDict()` methods (parity with Python). `packages/typescript/src/judges/base.ts:4-14` |
-| A2 | Extract `fallbackVerdict()` helper in TS — current duplication across `majorityVote.ts:8-19`, `bayesian.ts:15-26`, `weightedVote.ts:8-19`. Python has `_fallback_verdict()` in `judges/base.py:39-52`. |
+| ~~A2~~ | ~~Extract `fallbackVerdict()` helper in TS — current duplication across `majorityVote.ts:8-19`, `bayesian.ts:15-26`, `weightedVote.ts:8-19`.~~ **Fixed**: new `fallbackVerdict(transcript, judgeStrategy)` exported from `judges/base.ts`; the three judges now delegate to it. Python parallel is `_fallback_verdict()` in `judges/base.py:39-52`. |
 | A3 | Add `cost_usd` to `ClassificationResult` base in TS (Python has it). `packages/typescript/src/classifiers/base.ts` |
 | A4 | `Persona` in TS should have default `model` / `temperature` like Python's dataclass. |
 | A5 | `Jury` options object is large — consider a builder pattern for both languages, or at least a `JuryConfig.from_preset("content_moderation")` factory. |
@@ -184,7 +184,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 | # | Issue |
 |---|-------|
-| C1 | `ci.yml` runs tests only — **no lint (ruff/black/eslint), no type-check step** for TS. `npm run check` already exists in `package.json:41` — wire it in. |
+| ~~C1~~ | ~~`ci.yml` runs tests only — **no lint (ruff/black/eslint), no type-check step** for TS.~~ **Partially fixed**: TS `npm run check` (tsc) is now a CI gate in `.github/workflows/ci.yml`. Lint (ruff/black/eslint) is still open — tracked as **C1b** in §9. |
 | C2 | No dependabot config — supply-chain risk. |
 | C3 | No prerelease / RC channel in `release.yml`. |
 | C4 | No `py.typed` marker → Python type hints aren't exposed to downstream users. Add `packages/python/src/llm_jury/py.typed` and declare in `pyproject.toml [tool.setuptools.package-data]`. |
@@ -218,8 +218,9 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 - ~~A1~~: TS `Verdict` class (landed in P0).
 - ~~B4, B6~~: judge-field overwrite + TS cost coercion (PR #6).
 - ~~B8, B9~~: 429/5xx retry hardening (PR #5).
-- **Open:** A2 — extract `fallbackVerdict()` helper in TS (judges/{majorityVote,bayesian,weightedVote}.ts duplicate the "no persona responses" branch).
-- **Open:** C1 — lint + type-check + ruff/black in CI. Today CI runs `npm test` and `pytest` only; `npm run check` and ruff/black exist locally but aren't gates.
+- ~~A2~~ — extracted `fallbackVerdict()` helper in TS (judges/base.ts); majorityVote / bayesian / weightedVote now delegate.
+- ~~C1~~ (tsc) — `npm run check` is now a CI gate.
+- **Open:** C1b — lint gates (ruff/black for Python, eslint for TS). Net-new tooling — none of these are installed in the project today. Separate sprint because it surfaces unknown fix volume.
 - **Open:** E1 — TypeScript versions of the 4 Python examples in `examples/`.
 - **Open:** F2 — structured-output (JSON Schema) for persona responses (replace fragile `safe_json_parse`).
 
@@ -247,5 +248,5 @@ The original TS-port commit message said "full parity port with native type safe
 - ~~No logging~~ → **fixed (O1).**
 - ~~`classifyBatch` has a correctness bug Python doesn't~~ → **fixed (P0).**
 - `ClassificationResult.cost_usd` is still missing in TS base (audit A3 — open in P2).
-- ~~Judge fallback paths duplicated~~ → still true in TS (audit A2 — open in P1).
+- ~~Judge fallback paths duplicated~~ → **fixed (A2).**
 - ~~Hardcoded `"gpt-5-mini"` fallback diverges from Python's `DEFAULT_MODEL`~~ → audit B5, still open.

@@ -67,3 +67,17 @@ export class Verdict {
 export interface JudgeStrategy {
   judge(transcript: DebateTranscript, labels: string[]): Promise<Verdict>;
 }
+
+export function fallbackVerdict(transcript: DebateTranscript, judgeStrategy: string): Verdict {
+  return new Verdict({
+    label: transcript.primaryResult.label,
+    confidence: transcript.primaryResult.confidence,
+    reasoning: "No persona responses available. Falling back to primary result.",
+    wasEscalated: true,
+    primaryResult: transcript.primaryResult,
+    debateTranscript: transcript,
+    judgeStrategy,
+    totalDurationMs: transcript.durationMs,
+    totalCostUsd: transcript.totalCostUsd,
+  });
+}

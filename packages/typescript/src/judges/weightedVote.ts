@@ -1,5 +1,5 @@
 import type { DebateTranscript } from "../debate/engine.ts";
-import { Verdict } from "./base.ts";
+import { Verdict, fallbackVerdict } from "./base.ts";
 import type { JudgeStrategy } from "./base.ts";
 
 export class WeightedVoteJudge implements JudgeStrategy {
@@ -7,17 +7,7 @@ export class WeightedVoteJudge implements JudgeStrategy {
     const finalRound = transcript.rounds[transcript.rounds.length - 1] ?? [];
 
     if (finalRound.length === 0) {
-      return new Verdict({
-        label: transcript.primaryResult.label,
-        confidence: transcript.primaryResult.confidence,
-        reasoning: "No persona responses available. Falling back to primary result.",
-        wasEscalated: true,
-        primaryResult: transcript.primaryResult,
-        debateTranscript: transcript,
-        judgeStrategy: "weighted_vote",
-        totalDurationMs: transcript.durationMs,
-        totalCostUsd: transcript.totalCostUsd,
-      });
+      return fallbackVerdict(transcript, "weighted_vote");
     }
 
     const scores = new Map<string, number>();
