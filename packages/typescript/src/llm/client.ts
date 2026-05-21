@@ -17,6 +17,30 @@ export type LiteLLMClientOptions = {
   logger?: Logger;
 };
 
+function readErrorStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as Record<string, unknown>;
+  for (const key of ["status", "statusCode", "code"] as const) {
+    const value = e[key];
+    if (typeof value === "number") return value;
+  }
+  const response = e.response as Record<string, unknown> | undefined;
+  if (response && typeof response.status === "number") return response.status;
+  return undefined;
+}
+
+export function isRetryableError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  if (err instanceof Error && err.name === "AbortError") return true;
+  const status = readErrorStatus(err);
+  if (typeof status === "number" && (status === 429 || (status >= 500 && status < 600))) {
+    return true;
+  }
+  // Back-compat: errors thrown without a structured status but mentioning one in the message.
+  if (err instanceof Error && /\b(?:429|5\d{2})\b/.test(err.message)) return true;
+  return false;
+}
+
 async function withRetry<T>(
   fn: () => Promise<T>,
   maxAttempts: number,
@@ -29,11 +53,7 @@ async function withRetry<T>(
       return await fn();
     } catch (err) {
       lastError = err;
-      const isTransient =
-        err instanceof TypeError ||
-        (err instanceof Error && err.name === "AbortError") ||
-        (err instanceof Error && /5\d{2}|429/.test(err.message));
-      if (!isTransient || attempt === maxAttempts) {
+      if (!isRetryableError(err) || attempt === maxAttempts) {
         throw err;
       }
       const delay = baseDelayMs * Math.pow(2, attempt - 1);
@@ -105,7 +125,11 @@ export class LiteLLMClient implements LLMClient {
 
         if (!response.ok) {
           const detail = await response.text();
-          throw new Error(`LLM request failed (${response.status}): ${detail}`);
+          const httpError = new Error(`LLM request failed (${response.status}): ${detail}`) as Error & {
+            status: number;
+          };
+          httpError.status = response.status;
+          throw httpError;
         }
 
         const payload = (await response.json()) as {
