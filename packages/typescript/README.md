@@ -328,6 +328,26 @@ Report: `calibrationReport()` returns rows with threshold, accuracy, escalation 
 
 Temperature is automatically omitted for reasoning models (`gpt-5*`, `o1*`, `o3*`).
 
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `Error: LiteLLMClient requires an API key` (thrown before HTTP) | `OPENAI_API_KEY` and `LITELLM_API_KEY` both unset, and no `apiKey` passed | `export OPENAI_API_KEY=...` or `new LiteLLMClient({ apiKey: "..." })` |
+| `Authentication`/`401` on first LLM call | API key present but wrong / wrong provider for the model | Verify the key against the provider; check `OPENAI_BASE_URL` / `LITELLM_BASE_URL` |
+| Hangs ~60s then aborts | Default `timeoutMs=60_000`; provider didn't respond in time | `new LiteLLMClient({ timeoutMs: 30_000 })` — covered in T7 timeout test |
+| Verdict's `label` is the first label with `confidence=0` | `LLMClassifier` couldn't parse the model's JSON response | Use a model that supports `response_format`; persona responses are schema-constrained (F2), but `LLMClassifier`'s own parse path is not yet — see audit S3 |
+| `Error: HTTP 429 ...` after retries | Rate-limit budget exhausted; client retries 3× with backoff and now detects 429 / 5xx via `err.status` (B9 fix), but doesn't honour `Retry-After` (R7) | Lower `debateConcurrency`; lower batch `concurrency`; use a higher-tier key |
+| `verdict.judgeStrategy === "cost_guard_pre_flight"` (no debate ran) | Pre-flight estimate exceeded `maxDebateCostUsd` | Raise the cap, lower `maxRounds`, or accept the primary classifier verdict |
+| `verdict.judgeStrategy === "cost_guard_primary_fallback"` (debate ran partially) | Actual mid-debate spend hit the cap | Same as above; can still overshoot by up to one concurrency-batch (in-flight calls aren't cancellable) |
+| `verdict.totalCostUsd` is `undefined` / `null` even after a debate | Default `LiteLLMClient` cannot estimate cost (no npm pricing library) | Inject a custom `llmClient` that fills `costUsd`; the SDK forwards it through |
+| `classifyBatch` returns fewer / duplicated results than inputs | This was B1 (fixed) — if you see it on a current version, file a bug | Pin to the latest version; share repro under the audit's `classifyBatch` test pattern |
+| Verdict is never escalated even at very low confidence | `personas: []` silently disables escalation (by design) | Pass at least one persona |
+| One persona always missing from `verdict.debateTranscript.rounds` | That persona's `model` is invalid / not available to your key. Single-persona failure no longer crashes the verdict (B2 fix) — it's dropped | Pass a `logger` (e.g. `console`) to `new Jury({ ..., logger: console })` to see why |
+| Debate summary is `undefined` even in deliberation mode | Summariser LLM call failed; persona rounds are still load-bearing (post-D6 fix) | Same — pass a `logger` to see the warning |
+| Logs are silent in production | Default logger is `NOOP_LOGGER` (parity with Python being opt-in) | `new Jury({ ..., logger: console })` or pass any object matching the `Logger` interface |
+
+For deeper context on known open issues, see `AUDIT.md` §3 (Reliability) and §1 (Bugs).
+
 ## Examples
 
 Runnable examples live in `examples/typescript/` at the repo root (require `OPENAI_API_KEY` except `threshold_calibration`):
