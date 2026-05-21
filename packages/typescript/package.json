@@ -38,7 +38,8 @@
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
     "test": "node --test --experimental-strip-types tests/**/*.test.ts",
-    "check": "npm run build"
+    "check": "npm run build && npm run check:examples",
+    "check:examples": "tsc -p ../../examples/typescript/tsconfig.json"
   },
   "files": [
     "dist",
