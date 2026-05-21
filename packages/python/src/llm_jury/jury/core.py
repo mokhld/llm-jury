@@ -41,6 +41,7 @@ class Jury:
         max_debate_cost_usd: float | None = None,
         estimated_cost_per_persona_usd: float = 0.01,
         on_escalation: Callable[[str, ClassificationResult], None] | None = None,
+        on_cost_estimate: Callable[[float, str], bool | None] | None = None,
         on_verdict: Callable[[Verdict], None] | None = None,
         logger: logging.Logger | None = None,
         llm_client: LLMClient | None = None,
@@ -62,6 +63,7 @@ class Jury:
         self.max_debate_cost_usd = max_debate_cost_usd
         self.estimated_cost_per_persona_usd = max(0.0, estimated_cost_per_persona_usd)
         self.on_escalation = on_escalation
+        self.on_cost_estimate = on_cost_estimate
         self.on_verdict = on_verdict
         self.logger = logger or logging.getLogger(__name__)
         self._stats = JuryStats()
@@ -99,6 +101,35 @@ class Jury:
         self._stats.escalated += 1
         if self.on_escalation:
             self.on_escalation(text, primary)
+
+        # F4: optional user-supplied pre-debate cost gate. Fires before
+        # the hardcoded `max_debate_cost_usd` guard so user logic can
+        # short-circuit on policy beyond a fixed cap (per-tenant
+        # budgets, time-of-day, etc.). Returning False (or any falsy
+        # non-None value) skips the debate. Returning True or None
+        # proceeds.
+        if self.on_cost_estimate is not None:
+            decision = self.on_cost_estimate(self.estimated_max_debate_cost_usd, text)
+            if decision is False:
+                self.logger.info(
+                    "[llm-jury] skipping debate: on_cost_estimate returned False "
+                    "for estimate %.4f USD",
+                    self.estimated_max_debate_cost_usd,
+                )
+                return Verdict(
+                    label=primary.label,
+                    confidence=primary.confidence,
+                    reasoning=(
+                        "Debate skipped: on_cost_estimate callback returned "
+                        "False. Returning primary classifier result."
+                    ),
+                    was_escalated=True,
+                    primary_result=primary,
+                    debate_transcript=None,
+                    judge_strategy="cost_guard_user_override",
+                    total_duration_ms=int((time.perf_counter() - start) * 1000),
+                    total_cost_usd=primary.cost_usd or 0.0,
+                )
 
         if (
             self.max_debate_cost_usd is not None

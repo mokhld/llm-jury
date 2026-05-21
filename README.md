@@ -478,6 +478,7 @@ response_format)`. See per-package READMEs for usage.
 | Debate cost cap | `max_debate_cost_usd=None` | `maxDebateCostUsd` |
 | Debate concurrency | `debate_concurrency=5` | `debateConcurrency=5` |
 | Escalation callback | `on_escalation=None` | `onEscalation` |
+| Cost-estimate gate | `on_cost_estimate=None` | `onCostEstimate` |
 | Verdict callback | `on_verdict=None` | `onVerdict` |
 | LLM transport override | `llm_client=None` | `llmClient` |
 | Logger override | `logger=None` (defaults to `logging.getLogger(__name__)`) | `logger` (defaults to silent `NOOP_LOGGER`; pass `console` to opt in) |
@@ -665,6 +666,7 @@ The most common gotchas across both SDKs. For the full list with code examples, 
 | Repeated 429s after retries | Rate-limit budget exhausted; SDK retries 3× exponential but doesn't honour `Retry-After` (R7) | Lower `debate_concurrency` / `debateConcurrency`; use a higher-tier key |
 | `judge_strategy` / `judgeStrategy` is `cost_guard_pre_flight` | Pre-flight estimate exceeded `max_debate_cost_usd` — no debate ran | Raise the cap or lower `max_rounds` |
 | `judge_strategy` / `judgeStrategy` is `cost_guard_primary_fallback` | Actual mid-debate spend hit the cap mid-flight | Same — and note spend can still overshoot by up to one concurrency-batch |
+| `judge_strategy` / `judgeStrategy` is `cost_guard_user_override` | Your `on_cost_estimate` / `onCostEstimate` callback returned False | Working as intended — debate skipped per your policy |
 | Verdict is never escalated even at low confidence | `personas=[]` silently disables escalation (by design) | Pass at least one persona |
 | `total_cost_usd` / `totalCostUsd` is `None` / `undefined` | Python: model not in litellm's pricing table. TypeScript: no built-in cost estimation (no viable npm library) | Python: pin to a known-priced model. TS: inject a custom `llmClient` that fills `costUsd` |
 | TypeScript logs are silent | TS `Jury` defaults to `NOOP_LOGGER` | `new Jury({ ..., logger: console })` |

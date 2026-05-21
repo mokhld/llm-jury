@@ -230,6 +230,96 @@ class JuryControlTests(unittest.IsolatedAsyncioTestCase):
         # 3 personas × 2 rounds (default) × 0.02 = 0.12
         self.assertAlmostEqual(jury.estimated_max_debate_cost_usd, 0.12)
 
+    async def test_on_cost_estimate_false_skips_debate(self) -> None:
+        """F4: user callback returning False short-circuits the debate."""
+        classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
+        personas = [Persona(name="A", role="r", system_prompt="s")]
+        received: list[tuple[float, str]] = []
+        debate_called = False
+
+        class TrackingEngine(ExpensiveDebateEngine):
+            async def debate(self, *args: object, **kwargs: object) -> DebateTranscript:
+                nonlocal debate_called
+                debate_called = True
+                return await super().debate(*args, **kwargs)  # type: ignore[misc]
+
+        def gate(estimate: float, text: str) -> bool:
+            received.append((estimate, text))
+            return False
+
+        jury = Jury(
+            classifier=classifier,
+            personas=personas,
+            on_cost_estimate=gate,
+            judge=MockJudge(),
+        )
+        jury.debate_engine = TrackingEngine()
+
+        verdict = await jury.classify("hello")
+
+        self.assertEqual(verdict.judge_strategy, "cost_guard_user_override")
+        self.assertTrue(verdict.was_escalated)
+        self.assertEqual(verdict.label, "safe")
+        self.assertIsNone(verdict.debate_transcript)
+        self.assertFalse(
+            debate_called, "debate must not run when on_cost_estimate returns False"
+        )
+        self.assertEqual(len(received), 1)
+        estimate, text = received[0]
+        self.assertAlmostEqual(estimate, jury.estimated_max_debate_cost_usd)
+        self.assertEqual(text, "hello")
+
+    async def test_on_cost_estimate_true_proceeds(self) -> None:
+        classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
+        personas = [Persona(name="A", role="r", system_prompt="s")]
+        jury = Jury(
+            classifier=classifier,
+            personas=personas,
+            on_cost_estimate=lambda _est, _text: True,
+            judge=MockJudge(),
+        )
+        jury.debate_engine = ExpensiveDebateEngine()
+
+        verdict = await jury.classify("hello")
+        self.assertEqual(verdict.judge_strategy, "mock")
+
+    async def test_on_cost_estimate_none_proceeds(self) -> None:
+        """Returning None (default) is treated as 'proceed'."""
+        classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
+        personas = [Persona(name="A", role="r", system_prompt="s")]
+
+        def gate(estimate: float, text: str) -> None:
+            return None
+
+        jury = Jury(
+            classifier=classifier,
+            personas=personas,
+            on_cost_estimate=gate,
+            judge=MockJudge(),
+        )
+        jury.debate_engine = ExpensiveDebateEngine()
+
+        verdict = await jury.classify("hello")
+        self.assertEqual(verdict.judge_strategy, "mock")
+
+    async def test_on_cost_estimate_fires_before_max_debate_cost_guard(self) -> None:
+        """User callback runs first; cost_guard_pre_flight only fires if user proceeds."""
+        classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
+        personas = [
+            Persona(name=f"P{i}", role="r", system_prompt="s") for i in range(4)
+        ]
+        jury = Jury(
+            classifier=classifier,
+            personas=personas,
+            max_debate_cost_usd=0.05,
+            estimated_cost_per_persona_usd=0.01,
+            on_cost_estimate=lambda _e, _t: False,
+            judge=MockJudge(),
+        )
+        # Without the callback this would be cost_guard_pre_flight (0.08 > 0.05).
+        verdict = await jury.classify("text")
+        self.assertEqual(verdict.judge_strategy, "cost_guard_user_override")
+
 
 if __name__ == "__main__":
     unittest.main()
