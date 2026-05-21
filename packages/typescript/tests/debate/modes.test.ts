@@ -40,6 +40,54 @@ test("deliberation mode early consensus", async () => {
   assert.equal(transcript.rounds.length, 2);
 });
 
+test("F7: early stops on high confidence even with split labels", async () => {
+  const llm = new FakeLLMClient({
+    A: { content: JSON.stringify({ label: "safe", confidence: 0.97, reasoning: "a", key_factors: [] }) },
+    B: { content: JSON.stringify({ label: "unsafe", confidence: 0.96, reasoning: "b", key_factors: [] }) },
+    C: { content: JSON.stringify({ label: "safe", confidence: 0.98, reasoning: "c", key_factors: [] }) },
+  });
+  const engine = new DebateEngine(
+    personas,
+    new DebateConfig({ mode: DebateMode.DELIBERATION, maxRounds: 5, earlyStopMinConfidence: 0.95 }),
+    llm,
+  );
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
+  // Round 0 (initial opinions) always runs; F7 short-circuits at the
+  // consensus check after round 1 — so 2 rounds, not 5.
+  assert.equal(transcript.rounds.length, 2);
+});
+
+test("F7: does not early stop when one persona is below threshold", async () => {
+  const llm = new FakeLLMClient({
+    A: { content: JSON.stringify({ label: "safe", confidence: 0.97, reasoning: "a", key_factors: [] }) },
+    B: { content: JSON.stringify({ label: "unsafe", confidence: 0.50, reasoning: "b", key_factors: [] }) },
+    C: { content: JSON.stringify({ label: "safe", confidence: 0.96, reasoning: "c", key_factors: [] }) },
+  });
+  const engine = new DebateEngine(
+    personas,
+    new DebateConfig({ mode: DebateMode.DELIBERATION, maxRounds: 3, earlyStopMinConfidence: 0.95 }),
+    llm,
+  );
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
+  // Threshold not met → loop runs to maxRounds.
+  assert.equal(transcript.rounds.length, 3);
+});
+
+test("F7: default preserves unanimous-only consensus (no early stop on split labels)", async () => {
+  const llm = new FakeLLMClient({
+    A: { content: JSON.stringify({ label: "safe", confidence: 0.99, reasoning: "a", key_factors: [] }) },
+    B: { content: JSON.stringify({ label: "unsafe", confidence: 0.99, reasoning: "b", key_factors: [] }) },
+    C: { content: JSON.stringify({ label: "safe", confidence: 0.99, reasoning: "c", key_factors: [] }) },
+  });
+  const engine = new DebateEngine(
+    personas,
+    new DebateConfig({ mode: DebateMode.DELIBERATION, maxRounds: 3 }),
+    llm,
+  );
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
+  assert.equal(transcript.rounds.length, 3);
+});
+
 test("adversarial mode assigns prosecution and defense roles", async () => {
   const llm = new FakeLLMClient();
   const engine = new DebateEngine(personas, new DebateConfig({ mode: DebateMode.ADVERSARIAL }), llm);

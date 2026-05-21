@@ -51,12 +51,19 @@ export class DebateConfig {
   maxRounds: number;
   includePrimaryResult: boolean;
   includeConfidence: boolean;
+  // F7: optional high-confidence early stop for the DELIBERATION
+  // debate loop. When set, the loop also exits when the MIN
+  // persona confidence in a round is >= this threshold, even if
+  // personas disagree on label. undefined disables (default
+  // behaviour: only unanimous-label consensus halts early).
+  earlyStopMinConfidence?: number;
 
   constructor(options: Partial<DebateConfig> = {}) {
     this.mode = options.mode ?? DebateMode.DELIBERATION;
     this.maxRounds = options.maxRounds ?? 2;
     this.includePrimaryResult = options.includePrimaryResult ?? true;
     this.includeConfidence = options.includeConfidence ?? true;
+    this.earlyStopMinConfidence = options.earlyStopMinConfidence;
   }
 }
 
@@ -513,6 +520,19 @@ export class DebateEngine {
       return false;
     }
     const labels = new Set(roundResponses.map((r) => r.label));
-    return labels.size === 1;
+    if (labels.size === 1) {
+      return true;
+    }
+    // F7: high-confidence early stop. When every persona this round
+    // is highly confident in its own answer, further deliberation
+    // rarely changes the verdict — let the judge break the tie now.
+    const threshold = this.config.earlyStopMinConfidence;
+    if (threshold !== undefined) {
+      const minConfidence = Math.min(...roundResponses.map((r) => r.confidence));
+      if (minConfidence >= threshold) {
+        return true;
+      }
+    }
+    return false;
   }
 }

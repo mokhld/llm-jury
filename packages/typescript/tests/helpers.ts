@@ -36,8 +36,22 @@ export class FakeLLMClient {
       };
     }
 
+    // Prefer systemPrompt match — it's the persona-specific marker.
+    // The user prompt in deliberation rounds may legitimately mention
+    // other personas ("Persona A said..."), which used to make the
+    // first-iterated key win regardless of which persona is calling.
     for (const [key, reply] of Object.entries(this.replies)) {
-      if (prompt.includes(key) || systemPrompt.includes(key) || model === key) {
+      if (systemPrompt.includes(key) || model === key) {
+        return {
+          content: reply.content,
+          tokens: reply.tokens ?? 10,
+          costUsd: reply.costUsd ?? 0.001,
+        };
+      }
+    }
+
+    for (const [key, reply] of Object.entries(this.replies)) {
+      if (prompt.includes(key)) {
         return {
           content: reply.content,
           tokens: reply.tokens ?? 10,

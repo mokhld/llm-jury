@@ -179,6 +179,162 @@ class DebateModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(transcript.summary)
         self.assertEqual(llm.calls, [])
 
+    async def test_f7_early_stops_on_high_confidence_even_with_split_labels(
+        self,
+    ) -> None:
+        """F7: with early_stop_min_confidence set, the loop halts after a
+        round in which every persona is highly confident in its own answer,
+        even if they disagree on label."""
+        # Round 1: split labels (safe vs unsafe), all high confidence.
+        responses = {
+            "A": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "safe",
+                        "confidence": 0.97,
+                        "reasoning": "a",
+                        "key_factors": ["x"],
+                    }
+                )
+            ),
+            "B": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "unsafe",
+                        "confidence": 0.96,
+                        "reasoning": "b",
+                        "key_factors": ["y"],
+                    }
+                )
+            ),
+            "C": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "safe",
+                        "confidence": 0.98,
+                        "reasoning": "c",
+                        "key_factors": ["z"],
+                    }
+                )
+            ),
+        }
+        llm = FakeLLMClient(responses)
+        engine = DebateEngine(
+            personas=self.personas,
+            llm_client=llm,
+            config=DebateConfig(
+                mode=DebateMode.DELIBERATION,
+                max_rounds=5,
+                early_stop_min_confidence=0.95,
+            ),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        # Round 0 (initial opinions) always runs; F7 short-circuits at
+        # the consensus check after round 1 — so 2 rounds, not 5.
+        self.assertEqual(len(transcript.rounds), 2)
+
+    async def test_f7_does_not_early_stop_when_one_persona_below_threshold(
+        self,
+    ) -> None:
+        """F7: MIN-confidence semantics — a single low-confidence persona
+        keeps the loop going."""
+        responses = {
+            "A": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "safe",
+                        "confidence": 0.97,
+                        "reasoning": "a",
+                        "key_factors": ["x"],
+                    }
+                )
+            ),
+            "B": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "unsafe",
+                        "confidence": 0.50,  # below threshold
+                        "reasoning": "b",
+                        "key_factors": ["y"],
+                    }
+                )
+            ),
+            "C": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "safe",
+                        "confidence": 0.96,
+                        "reasoning": "c",
+                        "key_factors": ["z"],
+                    }
+                )
+            ),
+        }
+        llm = FakeLLMClient(responses)
+        engine = DebateEngine(
+            personas=self.personas,
+            llm_client=llm,
+            config=DebateConfig(
+                mode=DebateMode.DELIBERATION,
+                max_rounds=3,
+                early_stop_min_confidence=0.95,
+            ),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        # Threshold not met → loop runs to max_rounds.
+        self.assertEqual(len(transcript.rounds), 3)
+
+    async def test_f7_default_preserves_unanimous_only_consensus(self) -> None:
+        """F7 is opt-in: without early_stop_min_confidence, split labels keep
+        the loop going to max_rounds regardless of confidence."""
+        responses = {
+            "A": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "safe",
+                        "confidence": 0.99,
+                        "reasoning": "a",
+                        "key_factors": [],
+                    }
+                )
+            ),
+            "B": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "unsafe",
+                        "confidence": 0.99,
+                        "reasoning": "b",
+                        "key_factors": [],
+                    }
+                )
+            ),
+            "C": FakeLLMReply(
+                json.dumps(
+                    {
+                        "label": "safe",
+                        "confidence": 0.99,
+                        "reasoning": "c",
+                        "key_factors": [],
+                    }
+                )
+            ),
+        }
+        llm = FakeLLMClient(responses)
+        engine = DebateEngine(
+            personas=self.personas,
+            llm_client=llm,
+            config=DebateConfig(mode=DebateMode.DELIBERATION, max_rounds=3),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        # Default behaviour: no early-stop without unanimous labels → 3 rounds.
+        self.assertEqual(len(transcript.rounds), 3)
+
     async def test_one_persona_failure_does_not_crash_deliberation(self) -> None:
         llm = _FlakyLLMClient(fail_for={"B"})
         engine = DebateEngine(

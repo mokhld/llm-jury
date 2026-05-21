@@ -56,6 +56,13 @@ marked **[py]** or **[ts]**.
   `Jury.estimated_max_debate_cost_usd` property (already public
   since R2) returns the heuristic upper-bound estimate
   `N_personas × max_rounds × estimated_cost_per_persona_usd`.
+- **Confidence-based early stop (F7, closes R5)**: opt-in
+  `DebateConfig.early_stop_min_confidence` /
+  `earlyStopMinConfidence`. When set, the DELIBERATION loop also
+  halts after any round whose **minimum** persona confidence is
+  `>=` this threshold, even if personas disagree on label. The
+  original unanimous-label consensus check still triggers early
+  exit regardless. Defaults to disabled (no behaviour change).
 
 ### Changed
 - **[py]** Two `zip(...)` call sites in
@@ -69,6 +76,15 @@ marked **[py]** or **[ts]**.
   CLI `calibrate` (calibrator mutates `jury.threshold` in place).
 - **[py]** 32 files reformatted by `black` (whitespace / line wrap
   only — no semantic changes).
+
+### Changed
+- **[py][ts]** `FakeLLMClient` test helper now prefers a
+  `system_prompt` match over a user-prompt match when routing
+  per-persona responses. The user prompt in deliberation rounds
+  legitimately mentions other personas ("Persona A said …"),
+  which previously caused the first-iterated key to win for
+  every persona. Pure test-infra change — no production-code
+  impact, no production behaviour change.
 
 ### Fixed
 - **Summariser failure no longer crashes the verdict** (both SDKs).

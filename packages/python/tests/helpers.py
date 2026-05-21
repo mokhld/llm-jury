@@ -44,10 +44,20 @@ class FakeLLMClient:
             }
 
         persona_name = None
+        # Prefer system_prompt match — it's the persona-specific marker.
+        # The user prompt in deliberation rounds may legitimately mention
+        # other personas ("Persona A said..."), which used to make the
+        # first-iterated key win regardless of which persona is calling.
         for key in self.responses:
-            if key in prompt or key in system_prompt:
+            if key in system_prompt:
                 persona_name = key
                 break
+
+        if persona_name is None:
+            for key in self.responses:
+                if key in prompt:
+                    persona_name = key
+                    break
 
         if persona_name is None and self.responses:
             persona_name = next(iter(self.responses.keys()))

@@ -328,6 +328,7 @@ Stats: `jury.stats.total`, `fast_path`, `escalated`, `escalation_rate`, `cost_sa
 | `max_rounds` | `2` | Max deliberation rounds |
 | `include_primary_result` | `true` | Include primary result in prompts |
 | `include_confidence` | `true` | Include confidence in prompt context |
+| `early_stop_min_confidence` | `None` | **F7:** opt-in high-confidence early stop for DELIBERATION mode. When set, the deliberation loop exits early after any round whose **minimum** persona confidence is `>=` this value, even if personas disagree on label. Unanimous-label consensus still triggers early exit regardless. None = original behaviour (unanimous-label only). |
 
 ### Personas
 

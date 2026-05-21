@@ -507,6 +507,7 @@ Stats:
 | `max_rounds` / `maxRounds` | `2` | Max deliberation rounds |
 | `include_primary_result` / `includePrimaryResult` | `true` | Include primary result in prompts |
 | `include_confidence` / `includeConfidence` | `true` | Include confidence in prompt context |
+| `early_stop_min_confidence` / `earlyStopMinConfidence` | `None` / `undefined` | **F7:** opt-in high-confidence early stop for DELIBERATION mode. When set, the loop exits after any round whose **minimum** persona confidence is `>=` this value, even if personas disagree on label. |
 
 Modes:
 
