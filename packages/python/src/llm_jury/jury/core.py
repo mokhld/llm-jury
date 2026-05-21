@@ -39,6 +39,7 @@ class Jury:
         debate_config: DebateConfig | None = None,
         escalation_override: Callable[[ClassificationResult], bool] | None = None,
         max_debate_cost_usd: float | None = None,
+        estimated_cost_per_persona_usd: float = 0.01,
         on_escalation: Callable[[str, ClassificationResult], None] | None = None,
         on_verdict: Callable[[Verdict], None] | None = None,
         logger: logging.Logger | None = None,
@@ -59,10 +60,20 @@ class Jury:
         )
         self.escalation_override = escalation_override
         self.max_debate_cost_usd = max_debate_cost_usd
+        self.estimated_cost_per_persona_usd = max(0.0, estimated_cost_per_persona_usd)
         self.on_escalation = on_escalation
         self.on_verdict = on_verdict
         self.logger = logger or logging.getLogger(__name__)
         self._stats = JuryStats()
+
+    @property
+    def estimated_max_debate_cost_usd(self) -> float:
+        """Heuristic upper-bound estimate of a single debate's cost."""
+        return (
+            len(self.personas)
+            * max(1, self.debate_config.max_rounds)
+            * self.estimated_cost_per_persona_usd
+        )
 
     async def classify(self, text: str) -> Verdict:
         start = time.perf_counter()
@@ -88,6 +99,33 @@ class Jury:
         self._stats.escalated += 1
         if self.on_escalation:
             self.on_escalation(text, primary)
+
+        if (
+            self.max_debate_cost_usd is not None
+            and self.estimated_max_debate_cost_usd > self.max_debate_cost_usd
+        ):
+            self.logger.warning(
+                "[llm-jury] skipping debate: estimated cost %.4f USD exceeds "
+                "max_debate_cost_usd %.4f USD",
+                self.estimated_max_debate_cost_usd,
+                self.max_debate_cost_usd,
+            )
+            return Verdict(
+                label=primary.label,
+                confidence=primary.confidence,
+                reasoning=(
+                    "Debate skipped: estimated cost "
+                    f"({self.estimated_max_debate_cost_usd:.4f} USD) exceeds "
+                    f"max_debate_cost_usd ({self.max_debate_cost_usd:.4f} USD). "
+                    "Returning primary classifier result."
+                ),
+                was_escalated=True,
+                primary_result=primary,
+                debate_transcript=None,
+                judge_strategy="cost_guard_pre_flight",
+                total_duration_ms=int((time.perf_counter() - start) * 1000),
+                total_cost_usd=primary.cost_usd or 0.0,
+            )
 
         transcript = await self.debate_engine.debate(
             text=text,

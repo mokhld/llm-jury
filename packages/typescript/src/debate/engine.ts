@@ -118,7 +118,7 @@ export class DebateEngine {
     }
 
     if (this.config.mode === DebateMode.INDEPENDENT || this.config.mode === DebateMode.ADVERSARIAL) {
-      const responses = await this.runRound(text, primaryResult, labels, []);
+      const responses = await this.runRound(text, primaryResult, labels, [], maxCostUsd, totalCostUsd);
       rounds.push(responses);
       responses.forEach((response) => {
         totalTokens += Number(response.tokensUsed ?? 0);
@@ -148,7 +148,7 @@ export class DebateEngine {
       }
       rounds.push(responses);
     } else if (this.config.mode === DebateMode.DELIBERATION) {
-      const firstRound = await this.runRound(text, primaryResult, labels, []);
+      const firstRound = await this.runRound(text, primaryResult, labels, [], maxCostUsd, totalCostUsd);
       rounds.push(firstRound);
       firstRound.forEach((response) => {
         totalTokens += Number(response.tokensUsed ?? 0);
@@ -167,7 +167,7 @@ export class DebateEngine {
       }
 
       for (let i = 1; i < Math.max(1, this.config.maxRounds); i += 1) {
-        const current = await this.runDeliberationRound(text, primaryResult, labels, rounds);
+        const current = await this.runDeliberationRound(text, primaryResult, labels, rounds, maxCostUsd, totalCostUsd);
         rounds.push(current);
         current.forEach((response) => {
           totalTokens += Number(response.tokensUsed ?? 0);
@@ -216,9 +216,21 @@ export class DebateEngine {
     primaryResult: ClassificationResult,
     labels: string[],
     priorRounds: PersonaResponse[][],
+    maxCostUsd: number | null = null,
+    costSoFar = 0,
   ): Promise<PersonaResponse[]> {
     const out: PersonaResponse[] = [];
+    let cumulative = costSoFar;
     for (let i = 0; i < this.personas.length; i += this.concurrency) {
+      if (maxCostUsd != null && cumulative > maxCostUsd) {
+        this.logger.warn("[llm-jury] cost cap reached mid-round; halting remaining personas", {
+          cumulativeCostUsd: cumulative,
+          maxCostUsd,
+          personasRun: out.length,
+          personasRemaining: this.personas.length - i,
+        });
+        break;
+      }
       const batch = this.personas.slice(i, i + this.concurrency);
       const settled = await Promise.allSettled(
         batch.map((persona) => this.queryPersona(persona, text, primaryResult, labels, priorRounds)),
@@ -227,6 +239,7 @@ export class DebateEngine {
         const persona = batch[idx]!;
         if (result.status === "fulfilled") {
           out.push(result.value);
+          cumulative += Number(result.value.costUsd ?? 0);
         } else {
           out.push(this.failedPersonaResponse(persona, result.reason, labels));
         }
@@ -240,9 +253,21 @@ export class DebateEngine {
     primaryResult: ClassificationResult,
     labels: string[],
     priorRounds: PersonaResponse[][],
+    maxCostUsd: number | null = null,
+    costSoFar = 0,
   ): Promise<PersonaResponse[]> {
     const out: PersonaResponse[] = [];
+    let cumulative = costSoFar;
     for (let i = 0; i < this.personas.length; i += this.concurrency) {
+      if (maxCostUsd != null && cumulative > maxCostUsd) {
+        this.logger.warn("[llm-jury] cost cap reached mid-round; halting remaining personas", {
+          cumulativeCostUsd: cumulative,
+          maxCostUsd,
+          personasRun: out.length,
+          personasRemaining: this.personas.length - i,
+        });
+        break;
+      }
       const batch = this.personas.slice(i, i + this.concurrency);
       const settled = await Promise.allSettled(
         batch.map((persona) =>
@@ -253,6 +278,7 @@ export class DebateEngine {
         const persona = batch[idx]!;
         if (result.status === "fulfilled") {
           out.push(result.value);
+          cumulative += Number(result.value.costUsd ?? 0);
         } else {
           out.push(this.failedPersonaResponse(persona, result.reason, labels));
         }

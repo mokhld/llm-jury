@@ -19,6 +19,7 @@ export type JuryOptions = {
   debateConfig?: DebateConfig;
   escalationOverride?: (result: ClassificationResult) => boolean;
   maxDebateCostUsd?: number;
+  estimatedCostPerPersonaUsd?: number;
   onEscalation?: (text: string, result: ClassificationResult) => void;
   onVerdict?: (verdict: Verdict) => void;
   llmClient?: LLMClient;
@@ -48,6 +49,7 @@ export class Jury {
   debateEngine: DebateEngine;
   escalationOverride?: (result: ClassificationResult) => boolean;
   maxDebateCostUsd?: number;
+  estimatedCostPerPersonaUsd: number;
   onEscalation?: (text: string, result: ClassificationResult) => void;
   onVerdict?: (verdict: Verdict) => void;
   logger: Logger;
@@ -70,9 +72,18 @@ export class Jury {
     );
     this.escalationOverride = options.escalationOverride;
     this.maxDebateCostUsd = options.maxDebateCostUsd;
+    this.estimatedCostPerPersonaUsd = Math.max(0, options.estimatedCostPerPersonaUsd ?? 0.01);
     this.onEscalation = options.onEscalation;
     this.onVerdict = options.onVerdict;
     this._stats = new JuryStats();
+  }
+
+  get estimatedMaxDebateCostUsd(): number {
+    return (
+      this.personas.length *
+      Math.max(1, this.debateConfig.maxRounds) *
+      this.estimatedCostPerPersonaUsd
+    );
   }
 
   async classify(text: string): Promise<Verdict> {
@@ -102,6 +113,26 @@ export class Jury {
       confidence: primary.confidence,
     });
     this.onEscalation?.(text, primary);
+
+    if (this.maxDebateCostUsd != null && this.estimatedMaxDebateCostUsd > this.maxDebateCostUsd) {
+      this.logger.warn("[llm-jury] skipping debate: estimated cost exceeds budget", {
+        estimatedCostUsd: this.estimatedMaxDebateCostUsd,
+        maxDebateCostUsd: this.maxDebateCostUsd,
+      });
+      return new Verdict({
+        label: primary.label,
+        confidence: primary.confidence,
+        reasoning:
+          `Debate skipped: estimated cost (${this.estimatedMaxDebateCostUsd.toFixed(4)} USD) exceeds ` +
+          `maxDebateCostUsd (${this.maxDebateCostUsd.toFixed(4)} USD). Returning primary classifier result.`,
+        wasEscalated: true,
+        primaryResult: primary,
+        debateTranscript: null,
+        judgeStrategy: "cost_guard_pre_flight",
+        totalDurationMs: Date.now() - start,
+        totalCostUsd: 0,
+      });
+    }
 
     const transcript = await this.debateEngine.debate(
       text,

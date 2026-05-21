@@ -85,7 +85,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | # | Issue | Where |
 |---|-------|-------|
 | R1 | Partial-failure crashes (B2) — single juror failure kills verdict. | `debate/engine.py:186-192`, `debate/engine.ts:213-217` |
-| R2 | Cost budget checked **after** debate completes — actual cost can exceed cap by an entire round. | `jury/core.py:99-114`, `jury/core.ts:101-112` |
+| ~~R2~~ | ~~Cost budget checked **after** debate completes — actual cost can exceed cap by an entire round.~~ **Fixed**: pre-flight estimate (`estimated_cost_per_persona_usd` × N × max_rounds) refuses the debate when it would obviously blow the cap (`judge_strategy="cost_guard_pre_flight"`). TS `runRound`/`runDeliberationRound` also halt between concurrency-batches once the cap is exceeded. Known limitation: in-flight LiteLLM calls aren't reliably cancellable, so the cap can still be overshot by up to one concurrency-batch worth of spend. | `jury/core.py:106-128`, `jury/core.ts:113-126`, `debate/engine.ts:225-258` |
 | R3 | No hard `max_tokens` on LLM calls — long transcripts can blow context and cost. | `llm/client.py`, `llm/client.ts` |
 | R4 | TypeScript timeout hardcoded to 60s. | `llm/client.ts:82` |
 | R5 | Consensus check uses label equality only — doesn't consider confidence; entropy-based early stop would cut cost. | `debate/engine.py:434` |
@@ -213,9 +213,9 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 ### P1 — next sprint
 
-- R2: cost guard before-the-fact, not after.
-- O1: structured logging hooks in TS (parity with Python).
-- A1+A2: TS `Verdict` class + extract `fallbackVerdict` helper.
+- ~~R2: cost guard before-the-fact, not after.~~ ✅ Landed: pre-flight estimate + per-batch guard in TS rounds.
+- ~~O1: structured logging hooks in TS (parity with Python).~~ ✅ Landed (commit 85e98d2).
+- A1+A2: TS `Verdict` class + extract `fallbackVerdict` helper. (A1 landed in P0; A2 still open.)
 - C1: lint + type-check + ruff/black in CI.
 - E1: TypeScript examples.
 - F2: structured-output (JSON Schema) for persona responses.
