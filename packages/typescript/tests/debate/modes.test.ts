@@ -102,3 +102,41 @@ test("one persona failure does not crash deliberation mode", async () => {
   assert.equal(failed.confidence, 0);
   assert.match(failed.reasoning, /Persona call failed/);
 });
+
+// T9: single-persona deliberation — a one-persona round trivially has one
+// unique label, so consensus is reached immediately. Pins that the engine
+// runs maxRounds rounds without dividing-by-zero or otherwise mishandling
+// the size-1 persona set, and still produces a summary.
+test("single-persona deliberation reaches consensus and summarises", async () => {
+  const singlePersona: Persona[] = [
+    { name: "SOLO_PERSONA_TOKEN", role: "role", systemPrompt: "SOLO_PERSONA_TOKEN", model: "gpt-5-mini", temperature: 0.3 },
+  ];
+  const llm = new FakeLLMClient({
+    SOLO_PERSONA_TOKEN: {
+      content: JSON.stringify({ label: "safe", confidence: 0.9, reasoning: "ok", key_factors: ["x"] }),
+    },
+  });
+  const engine = new DebateEngine(
+    singlePersona,
+    new DebateConfig({ mode: DebateMode.DELIBERATION, maxRounds: 2 }),
+    llm,
+  );
+
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
+
+  assert.equal(transcript.rounds.length, 2);
+  for (const round of transcript.rounds) {
+    assert.equal(round.length, 1);
+    assert.equal(round[0]!.label, "safe");
+  }
+  assert.ok(transcript.summary, "summary should be produced after consensus");
+  assert.equal(engine.consensusReached(transcript.rounds[1]!), true);
+});
+
+// T9: no-response rounds — consensusReached([]) is defended at engine.ts:502
+// but never exercised. Lock the behaviour so a future refactor that flips the
+// empty-set semantics is a deliberate choice rather than a silent change.
+test("consensusReached returns false for an empty round (no-response branch)", () => {
+  const engine = new DebateEngine(personas, new DebateConfig({ mode: DebateMode.DELIBERATION }), new FakeLLMClient());
+  assert.equal(engine.consensusReached([]), false);
+});
