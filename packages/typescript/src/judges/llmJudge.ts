@@ -15,6 +15,17 @@ export type LLMJudgeOptions = {
   logger?: Logger;
 };
 
+/**
+ * Sum two cost components, preserving null when both are unknown.
+ * Returns null only when both inputs are null/undefined; otherwise treats
+ * the unknown component as 0. This avoids silently reporting `0` when cost
+ * tracking actually failed.
+ */
+export function sumCosts(a: number | null | undefined, b: number | null | undefined): number | null {
+  if ((a == null) && (b == null)) return null;
+  return Number(a ?? 0) + Number(b ?? 0);
+}
+
 export class LLMJudge implements JudgeStrategy {
   static readonly DEFAULT_SYSTEM_PROMPT =
     "You are the presiding judge in an expert panel. " +
@@ -53,6 +64,7 @@ export class LLMJudge implements JudgeStrategy {
   async judge(transcript: DebateTranscript, labels: string[]): Promise<Verdict> {
     const prompt = this.buildPrompt(transcript, labels);
     const payload = await this.llmClient.complete(this.model, this.systemPrompt, prompt, this.temperature);
+    const totalCostUsd = sumCosts(transcript.totalCostUsd, payload.costUsd);
     const parsed = safeJsonObject(stripMarkdown(payload.content));
     if (!parsed) {
       this.logger.warn("[llm-jury] LLMJudge response was not valid JSON; falling back to primary result", {
@@ -67,7 +79,7 @@ export class LLMJudge implements JudgeStrategy {
         debateTranscript: transcript,
         judgeStrategy: "llm_judge_fallback_invalid_json",
         totalDurationMs: transcript.durationMs,
-        totalCostUsd: Number(transcript.totalCostUsd ?? 0) + Number(payload.costUsd ?? 0),
+        totalCostUsd,
       });
     }
 
@@ -80,7 +92,7 @@ export class LLMJudge implements JudgeStrategy {
       debateTranscript: transcript,
       judgeStrategy: "llm_judge",
       totalDurationMs: transcript.durationMs,
-      totalCostUsd: Number(transcript.totalCostUsd ?? 0) + Number(payload.costUsd ?? 0),
+      totalCostUsd,
     });
   }
 
