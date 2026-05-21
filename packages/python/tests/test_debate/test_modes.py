@@ -99,6 +99,25 @@ class DebateModeTests(unittest.IsolatedAsyncioTestCase):
         failed = next(r for r in transcript.rounds[0] if r.persona_name == "B")
         self.assertIn("Persona call failed", failed.reasoning)
 
+    async def test_empty_personas_returns_zero_round_transcript(self) -> None:
+        # T1: debate(personas=[]) should short-circuit at engine.py:91 without
+        # calling the LLM. Guards against future regressions that try to index
+        # self.personas before the empty-list check.
+        llm = FakeLLMClient()
+        engine = DebateEngine(
+            personas=[],
+            llm_client=llm,
+            config=DebateConfig(mode=DebateMode.DELIBERATION, max_rounds=3),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        self.assertEqual(transcript.rounds, [])
+        self.assertEqual(transcript.total_tokens, 0)
+        self.assertEqual(transcript.total_cost_usd, 0.0)
+        self.assertIsNone(transcript.summary)
+        self.assertEqual(llm.calls, [])
+
     async def test_one_persona_failure_does_not_crash_deliberation(self) -> None:
         llm = _FlakyLLMClient(fail_for={"B"})
         engine = DebateEngine(
