@@ -97,6 +97,64 @@ class JuryControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verdict.judge_strategy, "cost_guard_primary_fallback")
         self.assertEqual(verdict.label, "safe")
 
+    async def test_pre_flight_estimate_skips_debate(self) -> None:
+        """If estimated cost (N×rounds×per_persona) > cap, debate must NOT run."""
+        classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
+        personas = [Persona(name=f"P{i}", role="r", system_prompt="s") for i in range(4)]
+        debate_engine_called = False
+
+        class TrackingEngine(ExpensiveDebateEngine):
+            async def debate(self, *args: object, **kwargs: object) -> DebateTranscript:
+                nonlocal debate_engine_called
+                debate_engine_called = True
+                return await super().debate(*args, **kwargs)  # type: ignore[misc]
+
+        jury = Jury(
+            classifier=classifier,
+            personas=personas,
+            max_debate_cost_usd=0.05,
+            estimated_cost_per_persona_usd=0.01,
+            judge=MockJudge(),
+        )
+        jury.debate_engine = TrackingEngine()
+
+        # 4 personas × 2 rounds × $0.01 = $0.08 > $0.05 → pre-flight refusal
+        self.assertGreater(jury.estimated_max_debate_cost_usd, jury.max_debate_cost_usd or 0)
+        verdict = await jury.classify("text")
+        self.assertEqual(verdict.judge_strategy, "cost_guard_pre_flight")
+        self.assertEqual(verdict.label, "safe")
+        self.assertTrue(verdict.was_escalated)
+        self.assertIsNone(verdict.debate_transcript)
+        self.assertFalse(debate_engine_called, "debate engine must not be called when pre-flight trips")
+
+    async def test_pre_flight_estimate_allows_debate_under_cap(self) -> None:
+        classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
+        personas = [Persona(name="A", role="r", system_prompt="s")]
+        jury = Jury(
+            classifier=classifier,
+            personas=personas,
+            max_debate_cost_usd=10.0,
+            estimated_cost_per_persona_usd=0.01,
+            judge=MockJudge(),
+        )
+        jury.debate_engine = ExpensiveDebateEngine()
+
+        # 1 × 2 × 0.01 = 0.02, well under 10.0 → debate runs (but ExpensiveDebateEngine
+        # returns 1.25 total, still under 10.0 → judge runs)
+        verdict = await jury.classify("text")
+        self.assertEqual(verdict.judge_strategy, "mock")
+
+    async def test_estimated_max_debate_cost_property(self) -> None:
+        classifier = FunctionClassifier(lambda _: ("safe", 0.9), ["safe", "unsafe"])
+        personas = [Persona(name=f"P{i}", role="r", system_prompt="s") for i in range(3)]
+        jury = Jury(
+            classifier=classifier,
+            personas=personas,
+            estimated_cost_per_persona_usd=0.02,
+        )
+        # 3 personas × 2 rounds (default) × 0.02 = 0.12
+        self.assertAlmostEqual(jury.estimated_max_debate_cost_usd, 0.12)
+
 
 if __name__ == "__main__":
     unittest.main()

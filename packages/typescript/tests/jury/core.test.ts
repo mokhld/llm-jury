@@ -2,9 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { FunctionClassifier } from "../../src/classifiers/functionAdapter.ts";
+import { DebateConfig, DebateMode } from "../../src/debate/engine.ts";
 import { Jury } from "../../src/jury/core.ts";
 import { MajorityVoteJudge } from "../../src/judges/majorityVote.ts";
+import type { Persona } from "../../src/personas/base.ts";
 import { PersonaRegistry } from "../../src/personas/registry.ts";
+
+const persona = (name: string): Persona => ({
+  name,
+  role: "r",
+  systemPrompt: "s",
+  model: "test-model",
+  temperature: 0,
+});
 import { FakeLLMClient } from "../helpers.ts";
 
 test("fast path skips escalation", async () => {
@@ -120,4 +130,67 @@ test("debateConcurrency is configurable", () => {
   const classifier = new FunctionClassifier(() => ["safe", 0.95], ["safe", "unsafe"]);
   const jury = new Jury({ classifier, personas: [], debateConcurrency: 2 });
   assert.equal((jury.debateEngine as unknown as { concurrency: number }).concurrency, 2);
+});
+
+test("estimatedMaxDebateCostUsd matches N x rounds x per-persona", () => {
+  const classifier = new FunctionClassifier(() => ["safe", 0.95], ["safe", "unsafe"]);
+  const personas = Array.from({ length: 3 }, (_, i) => persona(`P${i}`));
+  const jury = new Jury({
+    classifier,
+    personas,
+    debateConfig: new DebateConfig({ maxRounds: 2 }),
+    estimatedCostPerPersonaUsd: 0.02,
+  });
+  assert.equal(jury.estimatedMaxDebateCostUsd, 0.12);
+});
+
+test("pre-flight estimate skips debate when over cap", async () => {
+  const classifier = new FunctionClassifier(() => ["safe", 0.3], ["safe", "unsafe"]);
+  const llm = new FakeLLMClient();
+  const personas = Array.from({ length: 4 }, (_, i) => persona(`P${i}`));
+  const jury = new Jury({
+    classifier,
+    personas,
+    llmClient: llm,
+    maxDebateCostUsd: 0.05,
+    estimatedCostPerPersonaUsd: 0.01,
+    debateConfig: new DebateConfig({ maxRounds: 2 }),
+  });
+
+  // 4 × 2 × 0.01 = 0.08 > 0.05 → pre-flight refusal
+  const verdict = await jury.classify("text");
+  assert.equal(verdict.judgeStrategy, "cost_guard_pre_flight");
+  assert.equal(verdict.label, "safe");
+  assert.equal(verdict.wasEscalated, true);
+  assert.equal(verdict.debateTranscript, null);
+  assert.equal(llm.calls.length, 0, "no LLM calls when pre-flight trips");
+});
+
+test("per-batch cost guard halts new batches once cap exceeded", async () => {
+  const classifier = new FunctionClassifier(() => ["safe", 0.3], ["safe", "unsafe"]);
+  const personas = Array.from({ length: 6 }, (_, i) => persona(`P${i}`));
+
+  // Each persona call costs 0.10. With concurrency=2 and cap=0.05, after batch 1
+  // (2 calls, cumulative=0.20) the guard kicks in and skips batches 2 & 3.
+  const replies: Record<string, { content: string; costUsd: number }> = {};
+  for (const persona of personas) {
+    replies[persona.name] = {
+      content: JSON.stringify({ label: "safe", confidence: 0.7, reasoning: "r", key_factors: [] }),
+      costUsd: 0.10,
+    };
+  }
+  const llm = new FakeLLMClient(replies);
+
+  const jury = new Jury({
+    classifier,
+    personas,
+    llmClient: llm,
+    debateConcurrency: 2,
+    maxDebateCostUsd: 0.05,
+    estimatedCostPerPersonaUsd: 0.001, // keep pre-flight quiet so we exercise the batch guard
+    debateConfig: new DebateConfig({ mode: DebateMode.INDEPENDENT, maxRounds: 1 }),
+  });
+
+  await jury.classify("text");
+  assert.equal(llm.calls.length, 2, "second and third batches must be skipped after cap is exceeded");
 });
