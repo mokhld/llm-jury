@@ -152,11 +152,19 @@ class Jury:
                 )
 
         verdict = await self.judge.judge(transcript, self.classifier.labels)
-        verdict.was_escalated = True
-        verdict.primary_result = primary
-        verdict.debate_transcript = transcript
-        verdict.total_duration_ms = int((time.perf_counter() - start) * 1000)
 
+        # Jury is authoritative for `was_escalated`: it KNOWS this code path is
+        # the escalation branch, so judges can't override it.
+        verdict.was_escalated = True
+
+        # Backfill fields the judge may have left at their default/unset value.
+        # Custom judges that populated these intentionally are respected.
+        if verdict.primary_result is None:  # type: ignore[unreachable]
+            verdict.primary_result = primary
+        if verdict.debate_transcript is None:
+            verdict.debate_transcript = transcript
+        if not verdict.total_duration_ms:
+            verdict.total_duration_ms = int((time.perf_counter() - start) * 1000)
         if verdict.total_cost_usd is None:
             verdict.total_cost_usd = transcript.total_cost_usd
 

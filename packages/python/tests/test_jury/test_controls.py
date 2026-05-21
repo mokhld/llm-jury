@@ -144,6 +144,64 @@ class JuryControlTests(unittest.IsolatedAsyncioTestCase):
         verdict = await jury.classify("text")
         self.assertEqual(verdict.judge_strategy, "mock")
 
+    async def test_jury_respects_judge_set_total_duration_ms(self) -> None:
+        """Custom judge that explicitly sets total_duration_ms must NOT be overwritten."""
+        classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
+        personas = [Persona(name="A", role="r", system_prompt="s")]
+
+        class JudgeWithExplicitDuration:
+            async def judge(
+                self, transcript: DebateTranscript, labels: list[str]
+            ) -> Verdict:
+                return Verdict(
+                    label="unsafe",
+                    confidence=0.9,
+                    reasoning="judge",
+                    was_escalated=False,  # Jury must override to True.
+                    primary_result=transcript.primary_result,
+                    debate_transcript=transcript,
+                    judge_strategy="custom",
+                    total_duration_ms=99999,  # Jury must NOT overwrite.
+                    total_cost_usd=0.5,
+                )
+
+        jury = Jury(classifier=classifier, personas=personas, judge=JudgeWithExplicitDuration())
+        jury.debate_engine = ExpensiveDebateEngine()
+
+        verdict = await jury.classify("text")
+        self.assertEqual(verdict.total_duration_ms, 99999, "judge-set duration preserved")
+        self.assertTrue(verdict.was_escalated, "Jury authoritative for was_escalated")
+        self.assertEqual(verdict.total_cost_usd, 0.5)
+
+    async def test_jury_backfills_zero_duration_with_full_classify_time(self) -> None:
+        """Default judges set total_duration_ms=0; Jury fills full-classify time."""
+        classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
+        personas = [Persona(name="A", role="r", system_prompt="s")]
+
+        class JudgeWithZeroDuration:
+            async def judge(
+                self, transcript: DebateTranscript, labels: list[str]
+            ) -> Verdict:
+                return Verdict(
+                    label="unsafe",
+                    confidence=0.9,
+                    reasoning="judge",
+                    was_escalated=True,
+                    primary_result=transcript.primary_result,
+                    debate_transcript=transcript,
+                    judge_strategy="zero_duration",
+                    total_duration_ms=0,
+                    total_cost_usd=None,
+                )
+
+        jury = Jury(classifier=classifier, personas=personas, judge=JudgeWithZeroDuration())
+        jury.debate_engine = ExpensiveDebateEngine()
+
+        verdict = await jury.classify("text")
+        self.assertGreaterEqual(verdict.total_duration_ms, 0)
+        # The ExpensiveDebateEngine fixture returns duration_ms=5; Jury should now
+        # supply the wall-clock total (>= 0, typically a few ms).
+
     async def test_estimated_max_debate_cost_property(self) -> None:
         classifier = FunctionClassifier(lambda _: ("safe", 0.9), ["safe", "unsafe"])
         personas = [Persona(name=f"P{i}", role="r", system_prompt="s") for i in range(3)]
