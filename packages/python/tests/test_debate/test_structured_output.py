@@ -28,10 +28,26 @@ class StructuredOutputTests(unittest.IsolatedAsyncioTestCase):
         llm = FakeLLMClient(
             {
                 "ALPHA_PROMPT": FakeLLMReply(
-                    json.dumps({"label": "safe", "confidence": 0.9, "reasoning": "a", "key_factors": [], "dissent_notes": None})
+                    json.dumps(
+                        {
+                            "label": "safe",
+                            "confidence": 0.9,
+                            "reasoning": "a",
+                            "key_factors": [],
+                            "dissent_notes": None,
+                        }
+                    )
                 ),
                 "BRAVO_PROMPT": FakeLLMReply(
-                    json.dumps({"label": "safe", "confidence": 0.8, "reasoning": "b", "key_factors": [], "dissent_notes": None})
+                    json.dumps(
+                        {
+                            "label": "safe",
+                            "confidence": 0.8,
+                            "reasoning": "b",
+                            "key_factors": [],
+                            "dissent_notes": None,
+                        }
+                    )
                 ),
             }
         )
@@ -52,10 +68,26 @@ class StructuredOutputTests(unittest.IsolatedAsyncioTestCase):
         llm = FakeLLMClient(
             {
                 "ALPHA_PROMPT": FakeLLMReply(
-                    json.dumps({"label": "safe", "confidence": 0.9, "reasoning": "a", "key_factors": [], "dissent_notes": None})
+                    json.dumps(
+                        {
+                            "label": "safe",
+                            "confidence": 0.9,
+                            "reasoning": "a",
+                            "key_factors": [],
+                            "dissent_notes": None,
+                        }
+                    )
                 ),
                 "BRAVO_PROMPT": FakeLLMReply(
-                    json.dumps({"label": "safe", "confidence": 0.9, "reasoning": "b", "key_factors": [], "dissent_notes": "actual rebuttal"})
+                    json.dumps(
+                        {
+                            "label": "safe",
+                            "confidence": 0.9,
+                            "reasoning": "b",
+                            "key_factors": [],
+                            "dissent_notes": "actual rebuttal",
+                        }
+                    )
                 ),
             }
         )

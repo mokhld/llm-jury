@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -17,12 +16,16 @@ from llm_jury.jury.core import Jury
 from llm_jury.personas.base import Persona
 from llm_jury.personas.registry import PersonaRegistry
 
-app = typer.Typer(name="llm-jury", help="Confidence-driven escalation middleware for classifier edge cases.")
+app = typer.Typer(
+    name="llm-jury",
+    help="Confidence-driven escalation middleware for classifier edge cases.",
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _load_jsonl(path: Path) -> list[dict]:
     rows: list[dict] = []
@@ -79,6 +82,7 @@ def _select_judge(name: str, model: str | None = None):
     key = name.strip().lower()
     if key == "llm":
         from llm_jury.judges.llm_judge import LLMJudge
+
         return LLMJudge(model=model or DEFAULT_MODEL)
     if key == "majority":
         return MajorityVoteJudge()
@@ -86,6 +90,7 @@ def _select_judge(name: str, model: str | None = None):
         return WeightedVoteJudge()
     if key == "bayesian":
         from llm_jury.judges.bayesian import BayesianJudge
+
         return BayesianJudge()
     raise typer.BadParameter(f"Unsupported judge strategy: {name}")
 
@@ -110,6 +115,7 @@ def _build_classifier(classifier_spec: str, labels: list[str], rows: list[dict])
 
     if spec.startswith("llm:"):
         from llm_jury.classifiers.llm_classifier import LLMClassifier
+
         model_name = spec.split(":", 1)[1].strip()
         if not model_name:
             raise typer.BadParameter("classifier spec 'llm:' requires a model name")
@@ -117,9 +123,12 @@ def _build_classifier(classifier_spec: str, labels: list[str], rows: list[dict])
 
     if spec.startswith("huggingface:"):
         from llm_jury.classifiers.huggingface_adapter import HuggingFaceClassifier
+
         model_name = spec.split(":", 1)[1].strip()
         if not model_name:
-            raise typer.BadParameter("classifier spec 'huggingface:' requires a model name")
+            raise typer.BadParameter(
+                "classifier spec 'huggingface:' requires a model name"
+            )
         return HuggingFaceClassifier(model_name=model_name), False
 
     raise typer.BadParameter(
@@ -145,23 +154,32 @@ def _build_debate_config(
 # Commands
 # ---------------------------------------------------------------------------
 
+
 @app.command()
 def classify(
     input: Path = typer.Option(..., help="Input JSONL file"),
     output: Path = typer.Option(..., help="Output JSONL file"),
-    classifier: str = typer.Option("function", help="Classifier spec: function, llm:<model>, huggingface:<model>"),
+    classifier: str = typer.Option(
+        "function", help="Classifier spec: function, llm:<model>, huggingface:<model>"
+    ),
     personas: str = typer.Option("content_moderation", help="Persona set name"),
-    labels: Optional[str] = typer.Option(None, help="Comma-separated label list"),
-    judge: str = typer.Option("llm", help="Judge strategy: llm, majority, weighted, bayesian"),
+    labels: str | None = typer.Option(None, help="Comma-separated label list"),
+    judge: str = typer.Option(
+        "llm", help="Judge strategy: llm, majority, weighted, bayesian"
+    ),
     judge_model: str = typer.Option(DEFAULT_MODEL, help="Model for LLM judge"),
-    persona_model: Optional[str] = typer.Option(None, help="Override model for all personas"),
+    persona_model: str | None = typer.Option(
+        None, help="Override model for all personas"
+    ),
     threshold: float = typer.Option(0.7, help="Confidence threshold for escalation"),
     concurrency: int = typer.Option(10, help="Batch concurrency"),
     debate_mode: str = typer.Option("independent", help="Debate mode"),
     max_rounds: int = typer.Option(1, help="Max deliberation rounds"),
-    max_debate_cost: Optional[float] = typer.Option(None, help="Max debate cost in USD"),
+    max_debate_cost: float | None = typer.Option(None, help="Max debate cost in USD"),
     debate_concurrency: int = typer.Option(5, help="Debate persona concurrency"),
-    hide_primary_result: bool = typer.Option(False, help="Hide primary result from personas"),
+    hide_primary_result: bool = typer.Option(
+        False, help="Hide primary result from personas"
+    ),
     hide_confidence: bool = typer.Option(False, help="Hide confidence from personas"),
 ) -> None:
     """Classify JSONL texts with confidence-based jury escalation."""
@@ -175,34 +193,44 @@ def classify(
         personas=_select_personas(personas, persona_model),
         confidence_threshold=threshold,
         judge=_select_judge(judge, judge_model),
-        debate_config=_build_debate_config(debate_mode, max_rounds, hide_primary_result, hide_confidence),
+        debate_config=_build_debate_config(
+            debate_mode, max_rounds, hide_primary_result, hide_confidence
+        ),
         max_debate_cost_usd=max_debate_cost,
         debate_concurrency=debate_concurrency,
     )
 
     effective_concurrency = 1 if is_mock else concurrency
-    verdicts = asyncio.run(jury_instance.classify_batch(texts, concurrency=effective_concurrency))
+    verdicts = asyncio.run(
+        jury_instance.classify_batch(texts, concurrency=effective_concurrency)
+    )
     _write_jsonl(output, [v.to_dict() for v in verdicts])
     typer.echo(f"Wrote {len(verdicts)} verdict(s) to {output}")
 
 
 @app.command()
 def calibrate(
-    input: Path = typer.Option(..., help="Input JSONL file with ground-truth 'label' field"),
+    input: Path = typer.Option(
+        ..., help="Input JSONL file with ground-truth 'label' field"
+    ),
     classifier: str = typer.Option("function", help="Classifier spec"),
     personas: str = typer.Option("content_moderation", help="Persona set name"),
-    labels: Optional[str] = typer.Option(None, help="Comma-separated label list"),
+    labels: str | None = typer.Option(None, help="Comma-separated label list"),
     judge: str = typer.Option("llm", help="Judge strategy"),
     judge_model: str = typer.Option(DEFAULT_MODEL, help="Model for LLM judge"),
-    persona_model: Optional[str] = typer.Option(None, help="Override model for all personas"),
+    persona_model: str | None = typer.Option(
+        None, help="Override model for all personas"
+    ),
     initial_threshold: float = typer.Option(0.7, help="Starting threshold"),
     error_cost: float = typer.Option(10.0, help="Cost per classification error"),
     escalation_cost: float = typer.Option(0.05, help="Cost per escalation"),
     debate_mode: str = typer.Option("independent", help="Debate mode"),
     max_rounds: int = typer.Option(1, help="Max deliberation rounds"),
-    max_debate_cost: Optional[float] = typer.Option(None, help="Max debate cost in USD"),
+    max_debate_cost: float | None = typer.Option(None, help="Max debate cost in USD"),
     debate_concurrency: int = typer.Option(5, help="Debate persona concurrency"),
-    hide_primary_result: bool = typer.Option(False, help="Hide primary result from personas"),
+    hide_primary_result: bool = typer.Option(
+        False, help="Hide primary result from personas"
+    ),
     hide_confidence: bool = typer.Option(False, help="Hide confidence from personas"),
 ) -> None:
     """Calibrate the optimal confidence threshold from labelled data."""
@@ -227,13 +255,15 @@ def calibrate(
         personas=_select_personas(personas, persona_model),
         confidence_threshold=initial_threshold,
         judge=_select_judge(judge, judge_model),
-        debate_config=_build_debate_config(debate_mode, max_rounds, hide_primary_result, hide_confidence),
+        debate_config=_build_debate_config(
+            debate_mode, max_rounds, hide_primary_result, hide_confidence
+        ),
         max_debate_cost_usd=max_debate_cost,
         debate_concurrency=debate_concurrency,
     )
 
     calibrator = ThresholdCalibrator(jury_instance)
-    best = asyncio.run(
+    asyncio.run(
         calibrator.calibrate(
             texts=texts,
             labels=labels_true,

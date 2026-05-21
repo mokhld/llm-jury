@@ -13,11 +13,13 @@ class WeightedVoteJudgeTests(unittest.IsolatedAsyncioTestCase):
         transcript = DebateTranscript(
             input_text="text",
             primary_result=ClassificationResult("unknown", 0.2),
-            rounds=[[
-                PersonaResponse("A", "safe", 0.99, "r1", ["a"]),
-                PersonaResponse("B", "unsafe", 0.6, "r2", ["b"]),
-                PersonaResponse("C", "unsafe", 0.2, "r3", ["c"]),
-            ]],
+            rounds=[
+                [
+                    PersonaResponse("A", "safe", 0.99, "r1", ["a"]),
+                    PersonaResponse("B", "unsafe", 0.6, "r2", ["b"]),
+                    PersonaResponse("C", "unsafe", 0.2, "r3", ["c"]),
+                ]
+            ],
             duration_ms=10,
             total_tokens=20,
             total_cost_usd=0.001,

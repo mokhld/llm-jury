@@ -7,7 +7,9 @@ def strip_markdown_fences(content: str) -> str:
     """Remove markdown code fences (```json ... ```) wrapping a JSON payload."""
     text = content.strip()
     if text.startswith("```"):
-        lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
+        lines = [
+            line for line in text.splitlines() if not line.strip().startswith("```")
+        ]
         return "\n".join(lines).strip()
     return text
 

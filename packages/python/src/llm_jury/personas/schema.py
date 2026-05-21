@@ -9,6 +9,7 @@ Strict-mode JSON Schema requires ``additionalProperties: false`` and every
 property listed in ``required`` — optional fields like ``dissent_notes`` are
 modeled as nullable strings instead of being omitted.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -33,7 +34,13 @@ def build_persona_response_schema(labels: list[str]) -> dict[str, Any]:
             "key_factors": {"type": "array", "items": {"type": "string"}},
             "dissent_notes": {"type": ["string", "null"]},
         },
-        "required": ["label", "confidence", "reasoning", "key_factors", "dissent_notes"],
+        "required": [
+            "label",
+            "confidence",
+            "reasoning",
+            "key_factors",
+            "dissent_notes",
+        ],
         "additionalProperties": False,
     }
 

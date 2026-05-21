@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from llm_jury.classifiers.function_adapter import FunctionClassifier
 from llm_jury.calibration.optimizer import ThresholdCalibrator
+from llm_jury.classifiers.function_adapter import FunctionClassifier
 from llm_jury.jury.core import Jury
 
 
@@ -15,7 +15,9 @@ class ThresholdCalibratorTests(unittest.IsolatedAsyncioTestCase):
             "c": ("safe", 0.65),
             "d": ("unsafe", 0.55),
         }
-        classifier = FunctionClassifier(lambda text: confidences[text], ["safe", "unsafe"])
+        classifier = FunctionClassifier(
+            lambda text: confidences[text], ["safe", "unsafe"]
+        )
         jury = Jury(classifier=classifier, personas=[], confidence_threshold=0.7)
         calibrator = ThresholdCalibrator(jury)
 

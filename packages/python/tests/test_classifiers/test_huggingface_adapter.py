@@ -77,7 +77,9 @@ class HuggingFaceAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_labels_are_preserved(self) -> None:
         def fake_pipeline(task: str, *, model: str, device: str, top_k):  # noqa: ANN001
             def call(text: str):
-                return [[{"label": "RAW_A", "score": 0.6}, {"label": "RAW_B", "score": 0.4}]]
+                return [
+                    [{"label": "RAW_A", "score": 0.6}, {"label": "RAW_B", "score": 0.4}]
+                ]
 
             return call
 

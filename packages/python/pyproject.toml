@@ -32,7 +32,12 @@ dependencies = [
 sklearn = ["scikit-learn>=1.0"]
 huggingface = ["transformers>=4.30", "torch>=2.0"]
 all = ["llm-jury-classifier[sklearn,huggingface]"]
-dev = ["pytest>=7.0", "hypothesis>=6.0"]
+dev = [
+  "pytest>=7.0",
+  "hypothesis>=6.0",
+  "ruff>=0.15",
+  "black>=26.0",
+]
 
 [project.scripts]
 llm-jury = "llm_jury.cli.main:main"
@@ -50,3 +55,22 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "llm_jury" = ["py.typed"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+# E/W = pycodestyle, F = pyflakes, I = isort, B = bugbear, UP = pyupgrade
+select = ["E", "W", "F", "I", "B", "UP"]
+# E501 (line too long) is enforced by black; B008 (default arg func call) is
+# legitimately used by Typer for CLI option declarations.
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]  # assert False is fine in tests
+
+[tool.black]
+target-version = ["py310", "py311", "py312", "py313"]
+line-length = 88

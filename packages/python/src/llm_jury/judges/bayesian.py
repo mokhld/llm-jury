@@ -8,7 +8,9 @@ from .base import JudgeStrategy, Verdict, _fallback_verdict
 
 
 class BayesianJudge(JudgeStrategy):
-    def __init__(self, persona_priors: dict[str, dict[str, float]] | None = None) -> None:
+    def __init__(
+        self, persona_priors: dict[str, dict[str, float]] | None = None
+    ) -> None:
         self.persona_priors = persona_priors or {}
 
     async def judge(self, transcript: DebateTranscript, labels: list[str]) -> Verdict:
@@ -18,8 +20,14 @@ class BayesianJudge(JudgeStrategy):
         posterior: dict[str, float] = defaultdict(lambda: 1.0)
         for response in transcript.rounds[-1]:
             for label in labels:
-                prior = self.persona_priors.get(response.persona_name, {}).get(label, 1.0 / max(1, len(labels)))
-                likelihood = response.confidence if response.label == label else (1.0 - response.confidence)
+                prior = self.persona_priors.get(response.persona_name, {}).get(
+                    label, 1.0 / max(1, len(labels))
+                )
+                likelihood = (
+                    response.confidence
+                    if response.label == label
+                    else (1.0 - response.confidence)
+                )
                 posterior[label] *= max(1e-6, prior * likelihood)
 
         total = sum(posterior.values()) or 1.0
