@@ -265,8 +265,10 @@ import {
 | `debateConfig` | `undefined` | Debate configuration |
 | `escalationOverride` | `undefined` | Force escalation |
 | `maxDebateCostUsd` | `undefined` | Cost cap for debate |
+| `estimatedCostPerPersonaUsd` | `0.01` | Heuristic per-call cost used for the pre-flight estimate |
 | `debateConcurrency` | `5` | Max concurrent persona calls |
-| `onEscalation` | `undefined` | Escalation callback |
+| `onEscalation` | `undefined` | Fires when input is escalated to debate. `(text, primaryResult) => void` |
+| `onCostEstimate` | `undefined` | Fires with `(estimatedMaxDebateCostUsd, text)` immediately before a debate would run. Return `false` to skip the debate (verdict marked `cost_guard_user_override`); return `true` / `undefined` to proceed. |
 | `onVerdict` | `undefined` | Verdict callback |
 | `llmClient` | `undefined` | LLM transport override |
 
@@ -280,6 +282,8 @@ Behavior notes:
 - Escalation condition is strictly `< threshold` (exactly equal does not escalate).
 - If `personas` is empty, jury escalation is effectively disabled.
 - If `maxDebateCostUsd` is exceeded, result falls back to primary classifier with `judgeStrategy` set to `cost_guard_primary_fallback`.
+- `Jury.estimatedMaxDebateCostUsd` (getter) returns the heuristic upper-bound estimate `personas.length × maxRounds × estimatedCostPerPersonaUsd`. Useful for budgeting before any call.
+- `onCostEstimate` runs after the escalation decision but before any LLM call for the debate, *and* before the `maxDebateCostUsd` guard. Lets you layer per-tenant budgets, time-of-day gates, etc. on top of the hard cap.
 
 Stats: `jury.stats.total`, `fastPath`, `escalated`, `escalationRate`, `costSavingsVsAlwaysEscalate`.
 
@@ -363,6 +367,7 @@ stochastic samples, don't wrap.
 | `Error: HTTP 429 ...` after retries | Rate-limit budget exhausted; client retries 3× with backoff and now detects 429 / 5xx via `err.status` (B9 fix), but doesn't honour `Retry-After` (R7) | Lower `debateConcurrency`; lower batch `concurrency`; use a higher-tier key |
 | `verdict.judgeStrategy === "cost_guard_pre_flight"` (no debate ran) | Pre-flight estimate exceeded `maxDebateCostUsd` | Raise the cap, lower `maxRounds`, or accept the primary classifier verdict |
 | `verdict.judgeStrategy === "cost_guard_primary_fallback"` (debate ran partially) | Actual mid-debate spend hit the cap | Same as above; can still overshoot by up to one concurrency-batch (in-flight calls aren't cancellable) |
+| `verdict.judgeStrategy === "cost_guard_user_override"` | Your `onCostEstimate` callback returned `false` | Working as intended — the debate was skipped per your policy |
 | `verdict.totalCostUsd` is `undefined` / `null` even after a debate | Default `LiteLLMClient` cannot estimate cost (no npm pricing library) | Inject a custom `llmClient` that fills `costUsd`; the SDK forwards it through |
 | `classifyBatch` returns fewer / duplicated results than inputs | This was B1 (fixed) — if you see it on a current version, file a bug | Pin to the latest version; share repro under the audit's `classifyBatch` test pattern |
 | Verdict is never escalated even at very low confidence | `personas: []` silently disables escalation (by design) | Pass at least one persona |
