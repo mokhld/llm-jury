@@ -183,12 +183,21 @@ export class DebateEngine {
         }
       }
 
+      // Stage 3: Summarisation — degrade gracefully if the summariser call
+      // fails. The persona rounds are the load-bearing output; a missing
+      // synthesis must not crash the verdict.
       let summary: string | undefined;
       if (maxCostUsd == null || totalCostUsd <= maxCostUsd) {
-        const summaryResult = await this.summarise(text, labels, rounds);
-        totalTokens += summaryResult.tokens;
-        totalCostUsd += summaryResult.cost;
-        summary = summaryResult.summary;
+        try {
+          const summaryResult = await this.summarise(text, labels, rounds);
+          totalTokens += summaryResult.tokens;
+          totalCostUsd += summaryResult.cost;
+          summary = summaryResult.summary;
+        } catch (err) {
+          this.logger.warn("[llm-jury] summarisation failed; returning transcript without summary", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       return {

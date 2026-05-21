@@ -162,11 +162,17 @@ class DebateEngine:
                 if self._consensus_reached(current):
                     break
 
-            # Stage 3: Summarisation
+            # Stage 3: Summarisation — degrade gracefully if the summariser
+            # call fails. The persona rounds are the load-bearing output; a
+            # missing synthesis must not crash the verdict.
             if not (max_cost_usd is not None and total_cost > max_cost_usd):
-                summary, s_tokens, s_cost = await self._summarise(text, labels, rounds)
-                total_tokens += s_tokens
-                total_cost += s_cost
+                try:
+                    summary, s_tokens, s_cost = await self._summarise(text, labels, rounds)
+                    total_tokens += s_tokens
+                    total_cost += s_cost
+                except Exception as exc:  # noqa: BLE001 — same rationale as per-persona fallback
+                    logger.warning("Summarisation failed; returning transcript without summary: %s", exc)
+                    summary = None
 
         duration_ms = int((time.perf_counter() - start) * 1000)
         return DebateTranscript(
