@@ -132,7 +132,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | F1 | **Streaming verdicts** — yield persona responses as they arrive (async generator / `AsyncIterable`). |
 | ~~F2~~ | ~~**Structured-output enforcement** via JSON Schema — replaces fragile `safe_json_parse`.~~ **Fixed (persona path)**: both SDKs now build `build_persona_response_schema(labels)` (`personas/schema.py` / `personas/schema.ts`) and pass it as `response_format` to `LLMClient.complete()`. LiteLLMClient forwards it on Python/TS. `safe_json_parse` remains as defensive fallback. `LLMClassifier`'s own JSON parse path is intentionally out of scope here — separate follow-up. |
 | ~~F3~~ | ~~**Response cache** (LRU keyed by `(model, system, prompt, temperature, seed)`) with TTL.~~ **Fixed**: `CachingLLMClient` in both SDKs (`packages/python/src/llm_jury/llm/cache.py`, `packages/typescript/src/llm/cache.ts`). Opt-in wrapper, LRU + optional TTL, key includes `response_format` (we don't track `seed`). |
-| F4 | **Cost pre-estimate** — before running a debate, estimate `N_personas × M_rounds × avg_tokens × $/tok` so users can decide. |
+| ~~F4~~ | ~~**Cost pre-estimate** — before running a debate, estimate `N_personas × M_rounds × avg_tokens × $/tok` so users can decide.~~ **Fixed**: `Jury.estimated_max_debate_cost_usd` property already exposed `N × max_rounds × estimated_cost_per_persona_usd` (landed alongside R2). F4 adds an `on_cost_estimate(estimate_usd, text) -> bool \| None` callback that fires immediately before a debate would run; returning `False` short-circuits with `judge_strategy="cost_guard_user_override"`. Lets users layer per-tenant budgets and policy gates on top of the hard `max_debate_cost_usd` cap. Token-counted estimates (avg_tokens × $/tok) are still future work — needs a TS pricing table (same R2 / cost-tracking gap). |
 | F5 | **Verdict replay** — given a captured provenance block, replay deterministically (requires O2). |
 | F6 | **Async callbacks / webhooks** — emit a verdict to Kafka / HTTP endpoint when ready. |
 | F7 | **Entropy-based early-stop** in debate — if confidence > 0.95 across personas, exit before `max_rounds`. |
@@ -226,7 +226,8 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 
 ### P2 — quality polish
 
-- ~~F3 (cache)~~ **closed**: `CachingLLMClient` shipped in both SDKs (opt-in LRU + optional TTL). F4 (cost pre-estimate) and F7 (entropy early stop) still open.
+- ~~F3 (cache)~~ **closed**: `CachingLLMClient` shipped in both SDKs (opt-in LRU + optional TTL).
+- ~~F4 (cost pre-estimate)~~ **closed**: `on_cost_estimate` / `onCostEstimate` callback in both SDKs, plus the existing public `estimated_max_debate_cost_usd` property. F7 (entropy early stop) still open.
 - ~~T1–T10: fill test gaps.~~ **All closed** (PR #10, #11, #12). T7 retry-exhaustion subset still open but low priority.
 - ~~D2–D6: governance files.~~ **Closed**: `CONTRIBUTING.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, and `.github/ISSUE_TEMPLATE/` (bug + feature + config) all landed.
 - ~~D7: troubleshooting section in any README.~~ **Closed**: tables in root + both package READMEs.

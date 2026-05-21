@@ -194,3 +194,84 @@ test("per-batch cost guard halts new batches once cap exceeded", async () => {
   await jury.classify("text");
   assert.equal(llm.calls.length, 2, "second and third batches must be skipped after cap is exceeded");
 });
+
+test("F4: onCostEstimate returning false skips the debate", async () => {
+  const classifier = new FunctionClassifier(() => ["safe", 0.3], ["safe", "unsafe"]);
+  const llm = new FakeLLMClient();
+  const personas = [persona("A")];
+  const received: Array<{ estimate: number; text: string }> = [];
+
+  const jury = new Jury({
+    classifier,
+    personas,
+    llmClient: llm,
+    onCostEstimate: (estimate, text) => {
+      received.push({ estimate, text });
+      return false;
+    },
+  });
+
+  const verdict = await jury.classify("hello");
+
+  assert.equal(verdict.judgeStrategy, "cost_guard_user_override");
+  assert.equal(verdict.wasEscalated, true);
+  assert.equal(verdict.label, "safe");
+  assert.equal(verdict.debateTranscript, null);
+  assert.equal(llm.calls.length, 0, "no LLM calls when callback skips");
+  assert.equal(received.length, 1);
+  assert.equal(received[0]!.estimate, jury.estimatedMaxDebateCostUsd);
+  assert.equal(received[0]!.text, "hello");
+});
+
+test("F4: onCostEstimate returning true proceeds with the debate", async () => {
+  const classifier = new FunctionClassifier(() => ["safe", 0.3], ["safe", "unsafe"]);
+  const llm = new FakeLLMClient();
+  const personas = [persona("A")];
+  const jury = new Jury({
+    classifier,
+    personas,
+    llmClient: llm,
+    onCostEstimate: () => true,
+    debateConfig: new DebateConfig({ mode: DebateMode.INDEPENDENT, maxRounds: 1 }),
+  });
+
+  const verdict = await jury.classify("hello");
+  assert.notEqual(verdict.judgeStrategy, "cost_guard_user_override");
+  assert.ok(llm.calls.length > 0, "debate ran");
+});
+
+test("F4: onCostEstimate returning undefined proceeds", async () => {
+  const classifier = new FunctionClassifier(() => ["safe", 0.3], ["safe", "unsafe"]);
+  const llm = new FakeLLMClient();
+  const personas = [persona("A")];
+  const jury = new Jury({
+    classifier,
+    personas,
+    llmClient: llm,
+    onCostEstimate: () => undefined,
+    debateConfig: new DebateConfig({ mode: DebateMode.INDEPENDENT, maxRounds: 1 }),
+  });
+
+  const verdict = await jury.classify("hello");
+  assert.notEqual(verdict.judgeStrategy, "cost_guard_user_override");
+  assert.ok(llm.calls.length > 0);
+});
+
+test("F4: onCostEstimate fires before maxDebateCostUsd guard", async () => {
+  const classifier = new FunctionClassifier(() => ["safe", 0.3], ["safe", "unsafe"]);
+  const personas = Array.from({ length: 4 }, (_, i) => persona(`P${i}`));
+  const llm = new FakeLLMClient();
+
+  const jury = new Jury({
+    classifier,
+    personas,
+    llmClient: llm,
+    maxDebateCostUsd: 0.05,
+    estimatedCostPerPersonaUsd: 0.01, // 4 × 2 × 0.01 = 0.08 > 0.05
+    onCostEstimate: () => false,
+  });
+
+  // Without the callback this would be cost_guard_pre_flight.
+  const verdict = await jury.classify("text");
+  assert.equal(verdict.judgeStrategy, "cost_guard_user_override");
+});

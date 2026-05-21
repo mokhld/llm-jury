@@ -45,6 +45,17 @@ marked **[py]** or **[ts]**.
   Successful responses only — exceptions propagate uncached.
   Exposes `hits`, `misses`, `size`, and `clear()`. No behaviour
   change unless wrapped explicitly.
+- **Cost pre-estimate gate (F4)**: new optional `on_cost_estimate` /
+  `onCostEstimate` callback on `Jury`. Fires with
+  `(estimated_max_debate_cost_usd, text)` immediately before a
+  debate would run — *before* the existing `max_debate_cost_usd`
+  hard guard. Return `False` to skip the debate (verdict gets
+  `judge_strategy="cost_guard_user_override"`); return `True` /
+  `None` to proceed. Lets you layer per-tenant budgets, time-of-day
+  gates, or any other policy on top of the fixed cap. The
+  `Jury.estimated_max_debate_cost_usd` property (already public
+  since R2) returns the heuristic upper-bound estimate
+  `N_personas × max_rounds × estimated_cost_per_persona_usd`.
 
 ### Changed
 - **[py]** Two `zip(...)` call sites in

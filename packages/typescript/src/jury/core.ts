@@ -21,6 +21,7 @@ export type JuryOptions = {
   maxDebateCostUsd?: number;
   estimatedCostPerPersonaUsd?: number;
   onEscalation?: (text: string, result: ClassificationResult) => void;
+  onCostEstimate?: (estimateUsd: number, text: string) => boolean | undefined;
   onVerdict?: (verdict: Verdict) => void;
   llmClient?: LLMClient;
   logger?: Logger;
@@ -51,6 +52,7 @@ export class Jury {
   maxDebateCostUsd?: number;
   estimatedCostPerPersonaUsd: number;
   onEscalation?: (text: string, result: ClassificationResult) => void;
+  onCostEstimate?: (estimateUsd: number, text: string) => boolean | undefined;
   onVerdict?: (verdict: Verdict) => void;
   logger: Logger;
   private _stats: JuryStats;
@@ -74,6 +76,7 @@ export class Jury {
     this.maxDebateCostUsd = options.maxDebateCostUsd;
     this.estimatedCostPerPersonaUsd = Math.max(0, options.estimatedCostPerPersonaUsd ?? 0.01);
     this.onEscalation = options.onEscalation;
+    this.onCostEstimate = options.onCostEstimate;
     this.onVerdict = options.onVerdict;
     this._stats = new JuryStats();
   }
@@ -113,6 +116,33 @@ export class Jury {
       confidence: primary.confidence,
     });
     this.onEscalation?.(text, primary);
+
+    // F4: optional user-supplied pre-debate cost gate. Fires before
+    // the hardcoded maxDebateCostUsd guard so user logic can
+    // short-circuit on policy beyond a fixed cap (per-tenant
+    // budgets, time-of-day, etc.). Returning false skips the
+    // debate. Returning true or undefined proceeds.
+    if (this.onCostEstimate) {
+      const decision = this.onCostEstimate(this.estimatedMaxDebateCostUsd, text);
+      if (decision === false) {
+        this.logger.info("[llm-jury] skipping debate: onCostEstimate returned false", {
+          estimateUsd: this.estimatedMaxDebateCostUsd,
+        });
+        return new Verdict({
+          label: primary.label,
+          confidence: primary.confidence,
+          reasoning:
+            "Debate skipped: onCostEstimate callback returned false. " +
+            "Returning primary classifier result.",
+          wasEscalated: true,
+          primaryResult: primary,
+          debateTranscript: null,
+          judgeStrategy: "cost_guard_user_override",
+          totalDurationMs: Date.now() - start,
+          totalCostUsd: primary.costUsd ?? 0,
+        });
+      }
+    }
 
     if (this.maxDebateCostUsd != null && this.estimatedMaxDebateCostUsd > this.maxDebateCostUsd) {
       this.logger.warn("[llm-jury] skipping debate: estimated cost exceeds budget", {
