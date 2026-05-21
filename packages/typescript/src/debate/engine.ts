@@ -1,6 +1,8 @@
 import type { ClassificationResult } from "../classifiers/base.ts";
 import { LiteLLMClient } from "../llm/client.ts";
 import type { LLMClient } from "../llm/client.ts";
+import { NOOP_LOGGER } from "../logger.ts";
+import type { Logger } from "../logger.ts";
 import type { Persona, PersonaResponse } from "../personas/base.ts";
 import { stripMarkdown } from "../utils.ts";
 
@@ -61,17 +63,20 @@ export class DebateEngine {
   private config: DebateConfig;
   private llmClient: LLMClient;
   private concurrency: number;
+  private logger: Logger;
 
   constructor(
     personas: Persona[],
     config = new DebateConfig(),
     llmClient: LLMClient = new LiteLLMClient(),
     concurrency = 5,
+    logger: Logger = NOOP_LOGGER,
   ) {
     this.personas = personas;
     this.config = config;
     this.llmClient = llmClient;
     this.concurrency = Math.max(1, concurrency);
+    this.logger = logger;
   }
 
   static jsonResponseBlock(): string {
@@ -258,9 +263,7 @@ export class DebateEngine {
 
   failedPersonaResponse(persona: Persona, error: unknown, labels: string[]): PersonaResponse {
     const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    if (typeof console !== "undefined") {
-      console.warn(`[llm-jury] persona ${persona.name} failed during debate: ${message}`);
-    }
+    this.logger.warn(`[llm-jury] persona ${persona.name} failed during debate`, { error: message });
     return {
       personaName: persona.name,
       label: labels[0] ?? "unknown",

@@ -462,7 +462,7 @@ import {
 | Escalation callback | `on_escalation=None` | `onEscalation` |
 | Verdict callback | `on_verdict=None` | `onVerdict` |
 | LLM transport override | `llm_client=None` | `llmClient` |
-| Logger override | `logger=None` | n/a |
+| Logger override | `logger=None` (defaults to `logging.getLogger(__name__)`) | `logger` (defaults to silent `NOOP_LOGGER`; pass `console` to opt in) |
 
 Methods:
 

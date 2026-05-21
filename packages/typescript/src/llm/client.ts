@@ -1,3 +1,6 @@
+import { NOOP_LOGGER } from "../logger.ts";
+import type { Logger } from "../logger.ts";
+
 export interface LLMClient {
   complete(
     model: string,
@@ -11,12 +14,14 @@ export type LiteLLMClientOptions = {
   baseUrl?: string;
   apiKey?: string;
   timeoutMs?: number;
+  logger?: Logger;
 };
 
 async function withRetry<T>(
   fn: () => Promise<T>,
-  maxAttempts = 3,
-  baseDelayMs = 1000,
+  maxAttempts: number,
+  baseDelayMs: number,
+  logger: Logger,
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -32,6 +37,10 @@ async function withRetry<T>(
         throw err;
       }
       const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      logger.warn(`[llm-jury] LLM call failed (attempt ${attempt}/${maxAttempts}); retrying`, {
+        delayMs: delay,
+        error: err instanceof Error ? err.message : String(err),
+      });
       await new Promise((r) => setTimeout(r, delay));
     }
   }
@@ -42,11 +51,13 @@ export class LiteLLMClient implements LLMClient {
   private baseUrl: string;
   private apiKey: string | null;
   private timeoutMs: number;
+  private logger: Logger;
 
   constructor(options: LiteLLMClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.LITELLM_BASE_URL ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
     this.apiKey = options.apiKey ?? process.env.LITELLM_API_KEY ?? process.env.OPENAI_API_KEY ?? null;
     this.timeoutMs = options.timeoutMs ?? 60000;
+    this.logger = options.logger ?? NOOP_LOGGER;
   }
 
   async complete(
@@ -115,7 +126,7 @@ export class LiteLLMClient implements LLMClient {
       } finally {
         clearTimeout(timeout);
       }
-    });
+    }, 3, 1000, this.logger);
   }
 }
 
