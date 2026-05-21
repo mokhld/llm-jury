@@ -41,8 +41,8 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | B5 | `packages/typescript/src/debate/engine.ts:387` | Hardcoded fallback model `"gpt-5-mini"` when `personas` is empty — diverges from Python's `DEFAULT_MODEL` constant. |
 | B6 | `packages/typescript/src/judges/llmJudge.ts:61, 74` | Cost accumulation coerces `null` `totalCostUsd` to `0`, **losing actual cost** when the field starts nullable. |
 | B7 | `packages/typescript/src/jury/core.ts:140` | If a `classifyBatch` worker throws, `Promise.all` rejects and the caller gets no partial results — no per-item error handling. |
-| B8 | `packages/python/src/llm_jury/llm/client.py:32-36` | Tenacity retries on `ConnectionError`/`TimeoutError`/`OSError` only. **Does not explicitly retry 429 / 503**. |
-| B9 | `packages/typescript/src/llm/client.ts:28-30` | Retryable-error detection uses a regex `5\d{2}\|429` on the error message — fragile; many SDK errors don't surface status this way. |
+| ~~B8~~ | `packages/python/src/llm_jury/llm/client.py` | ~~Tenacity retries on `ConnectionError`/`TimeoutError`/`OSError` only. Does not explicitly retry 429 / 503.~~ **Fixed**: custom `_is_retryable_error` predicate now also retries on litellm typed errors (matched by class name to avoid hard import) and any exception with `status_code` / `http_status` / `status` in {429, 500-599}. |
+| ~~B9~~ | `packages/typescript/src/llm/client.ts` | ~~Retryable-error detection uses a regex `5\d{2}\|429` on the error message — fragile; many SDK errors don't surface status this way.~~ **Fixed**: new exported `isRetryableError` inspects `err.status` / `err.statusCode` / `err.code` / `err.response?.status`; the regex fallback is kept for back-compat. The HTTP error thrown on `!response.ok` now carries `.status`. |
 
 ### Medium
 
@@ -90,7 +90,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 | R4 | TypeScript timeout hardcoded to 60s. | `llm/client.ts:82` |
 | R5 | Consensus check uses label equality only — doesn't consider confidence; entropy-based early stop would cut cost. | `debate/engine.py:434` |
 | R6 | No response cache. Identical `(model, prompt)` → re-queried every time. | global |
-| R7 | No 429 / Retry-After respect — backoff is exponential but doesn't honor server hints. | `llm/client.py:32-36`, `llm/client.ts:28-30` |
+| R7 | 429s and 5xx now trigger retry (B8/B9), but the `Retry-After` server hint is still ignored — backoff is purely exponential. | `llm/client.py`, `llm/client.ts` |
 | R8 | `classify_batch` builds all coroutines up-front — memory spike at 100k+ items. | `jury/core.py:130-137` |
 | R9 | `Classifier.classify_batch()` base impl is sequential `await` in a list-comp — defeats batching unless every subclass overrides. | `classifiers/base.py:23-24` |
 
@@ -219,7 +219,7 @@ The library is **not yet production-hardened** for high-stakes use (compliance, 
 - C1: lint + type-check + ruff/black in CI.
 - E1: TypeScript examples.
 - F2: structured-output (JSON Schema) for persona responses.
-- B4, B6, B8, B9: judge-field overwrite, cost coercion, 429 handling.
+- B4, B6: judge-field overwrite, cost coercion. (~~B8, B9~~ 429/5xx retry handling: landed.)
 
 ### P2 — quality polish
 
