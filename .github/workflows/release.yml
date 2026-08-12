@@ -201,17 +201,21 @@ jobs:
         with:
           ref: refs/tags/v${{ inputs.version }}
 
+      # Publishes via npm trusted publishing (OIDC): the @llm-jury/core
+      # package on npmjs.com trusts this repo + workflow + the `npm`
+      # environment, so no token is needed. Requires npm CLI >= 11.5.1
+      # (Node 22 bundles an older npm, hence the global upgrade). Do NOT
+      # set registry-url on setup-node or NODE_AUTH_TOKEN here: the
+      # generated .npmrc would shadow the OIDC exchange.
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Install and publish
         working-directory: packages/typescript
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          npm install -g npm@latest
           npm install
           npm publish --access public --provenance
 
