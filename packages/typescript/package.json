@@ -1,6 +1,6 @@
 {
   "name": "@llm-jury/core",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "TypeScript package for confidence-driven escalation with expert jury debate",
   "license": "MIT",
   "author": "Mohammed Khalid (https://github.com/mokhld)",
