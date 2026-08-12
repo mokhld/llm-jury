@@ -6,7 +6,7 @@ from typing import Any
 
 from llm_jury.classifiers.base import ClassificationResult
 from llm_jury.debate.engine import DebateConfig, DebateEngine, DebateMode
-from llm_jury.personas.base import Persona
+from llm_jury.personas.base import Persona, PersonaResponse
 
 
 def _persona_payload(label: str = "safe", confidence: float = 0.8) -> str:
@@ -176,6 +176,101 @@ class SummariserFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(llm.summarisation_calls, 1)
         # Transcript still usable; summary absent.
         self.assertIsNone(transcript.summary)
+
+
+class _AlwaysFailingClient:
+    """LLM client where every call raises (e.g. missing API key)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(
+        self,
+        model: str,
+        system_prompt: str,
+        prompt: str,
+        temperature: float = 0.0,
+        response_format: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.calls += 1
+        raise RuntimeError("no api key")
+
+
+class AllPersonasFailedTests(unittest.IsolatedAsyncioTestCase):
+    """When the whole opening round fails, the debate must stop paying for
+    doomed follow-up rounds and summarisation."""
+
+    def setUp(self) -> None:
+        self.personas = [
+            Persona(name="A", role="role", system_prompt="A"),
+            Persona(name="B", role="role", system_prompt="B"),
+            Persona(name="C", role="role", system_prompt="C"),
+        ]
+        self.primary = ClassificationResult(label="unknown", confidence=0.4)
+
+    async def test_failed_responses_are_marked(self) -> None:
+        llm = _AlwaysFailingClient()
+        engine = DebateEngine(
+            personas=self.personas,
+            llm_client=llm,
+            config=DebateConfig(mode=DebateMode.INDEPENDENT),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        for response in transcript.rounds[0]:
+            self.assertTrue(response.failed)
+        self.assertEqual(transcript.persona_failures, 3)
+
+    async def test_parse_failure_is_marked_failed(self) -> None:
+        engine = DebateEngine(personas=self.personas)
+        response = engine._parse_persona_response("not json", "A", ["safe", "unsafe"])
+        self.assertTrue(response.failed)
+
+    async def test_deliberation_aborts_after_all_failed_opening_round(self) -> None:
+        llm = _AlwaysFailingClient()
+        engine = DebateEngine(
+            personas=self.personas,
+            llm_client=llm,
+            config=DebateConfig(mode=DebateMode.DELIBERATION, max_rounds=3),
+        )
+
+        transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
+
+        # Only the opening round ran: 3 persona calls, no deliberation
+        # rounds, no summariser call.
+        self.assertEqual(len(transcript.rounds), 1)
+        self.assertEqual(llm.calls, 3)
+
+    async def test_consensus_ignores_failed_responses(self) -> None:
+        engine = DebateEngine(personas=self.personas)
+        failed = PersonaResponse("C", "safe", 0.0, "failed", [], failed=True)
+        real_a = PersonaResponse("A", "unsafe", 0.9, "r", [])
+        real_b = PersonaResponse("B", "unsafe", 0.8, "r", [])
+
+        # Two real agreeing votes + one failed placeholder = consensus.
+        self.assertTrue(engine._consensus_reached([real_a, real_b, failed]))
+        # A round of pure failures is not unanimous agreement on labels[0].
+        self.assertFalse(engine._consensus_reached([failed, failed]))
+
+    async def test_deliberation_prompt_excludes_failed_responses(self) -> None:
+        engine = DebateEngine(
+            personas=self.personas,
+            config=DebateConfig(mode=DebateMode.DELIBERATION),
+        )
+        prior = [
+            [
+                PersonaResponse("A", "unsafe", 0.9, "real reasoning", []),
+                PersonaResponse(
+                    "B", "safe", 0.0, "Persona call failed: boom", [], failed=True
+                ),
+            ]
+        ]
+        prompt = engine._build_deliberation_prompt(
+            self.personas[0], "text", self.primary, ["safe", "unsafe"], prior
+        )
+        self.assertIn("real reasoning", prompt)
+        self.assertNotIn("Persona call failed", prompt)
 
 
 class MalformedPersonaJSONTests(unittest.IsolatedAsyncioTestCase):

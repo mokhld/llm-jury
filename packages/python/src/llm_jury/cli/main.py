@@ -201,11 +201,31 @@ def classify(
     )
 
     effective_concurrency = 1 if is_mock else concurrency
-    verdicts = asyncio.run(
-        jury_instance.classify_batch(texts, concurrency=effective_concurrency)
+    results = asyncio.run(
+        jury_instance.classify_batch(
+            texts, concurrency=effective_concurrency, return_exceptions=True
+        )
     )
-    _write_jsonl(output, [v.to_dict() for v in verdicts])
-    typer.echo(f"Wrote {len(verdicts)} verdict(s) to {output}")
+
+    rows: list[dict] = []
+    failures = 0
+    for text, result in zip(texts, results, strict=True):
+        if isinstance(result, BaseException):
+            failures += 1
+            rows.append({"text": text, "error": f"{type(result).__name__}: {result}"})
+        else:
+            rows.append(result.to_dict())
+
+    _write_jsonl(output, rows)
+    typer.echo(f"Wrote {len(rows)} verdict(s) to {output}")
+    if failures:
+        typer.echo(
+            f"Warning: {failures} of {len(rows)} row(s) failed; "
+            "failed rows contain an 'error' field instead of a verdict.",
+            err=True,
+        )
+        if failures == len(rows):
+            raise typer.Exit(code=1)
 
 
 @app.command()

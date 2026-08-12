@@ -11,7 +11,29 @@ marked **[py]** or **[ts]**.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08
+
 ### Added
+- **Debate health surfaced on `Verdict`** (both SDKs).
+  `Verdict.persona_failures` / `personaFailures` counts persona
+  calls across the debate that failed (LLM error or unparseable
+  output), set authoritatively by `Jury` after judging (like
+  `was_escalated`). `Verdict.debate_degraded` / `debateDegraded`
+  is true when the count is non-zero — the verdict was decided by
+  fewer jurors than configured, or fell back to the primary
+  classifier entirely. Both fields are serialised by
+  `to_dict()` / `toDict()` so pipelines can route degraded
+  verdicts to human review. `PersonaResponse` gains a `failed`
+  flag; `DebateTranscript.persona_failures` (py property) and
+  `countPersonaFailures(rounds)` (ts helper) expose the raw count.
+  `Jury` logs a warning whenever a degraded verdict is produced.
+- **Batch error isolation**: `classify_batch(texts, concurrency,
+  return_exceptions=False)` / `classifyBatch(texts, concurrency,
+  returnExceptions)`. When enabled, a failing text yields its
+  exception in-slot (mirroring `asyncio.gather` /
+  `Promise.allSettled` semantics) instead of rejecting the whole
+  batch and discarding completed verdicts and their spend.
+  Defaults preserve the old fail-fast behaviour.
 - **[py]** `py.typed` marker — type checkers (mypy, pyright) now
   recognise the package as typed and surface its annotations to
   downstream users.
@@ -87,6 +109,31 @@ marked **[py]** or **[ts]**.
   impact, no production behaviour change.
 
 ### Fixed
+- **Failed persona calls no longer count as votes** (both SDKs).
+  Previously a persona whose LLM call failed (missing API key,
+  provider outage, rate-limit exhaustion) or whose output couldn't
+  be parsed was recorded as a real `labels[0]` vote at confidence
+  0.0. With every persona failing, `MajorityVoteJudge` fabricated a
+  unanimous `labels[0]` verdict at confidence **1.0** (silently
+  flipping e.g. an "unsafe" primary classification to "safe"), and
+  `BayesianJudge` elected the *opposite* label at ~1.0. Failed
+  responses are now marked `failed=True` / `failed: true`, stay in
+  the transcript for audit, and are excluded from all four judges,
+  the consensus check, and every prompt builder. When the entire
+  final round failed, judges fall back to the primary classifier
+  result (`LLMJudge` additionally skips its own doomed LLM call,
+  marker `llm_judge_fallback_personas_failed`).
+- **Deliberation debates stop paying after a dead opening round**
+  (both SDKs). If every persona call in the opening round failed,
+  the engine no longer runs further deliberation rounds and the
+  summariser against pure failure placeholders (previously 7 doomed
+  LLM calls for a 3-persona debate; now 3). An all-failed later
+  round likewise halts remaining rounds.
+- **One bad row no longer destroys a whole CLI batch** (both SDKs).
+  `llm-jury classify` now records per-row failures as
+  `{"text", "error"}` rows in the output JSONL, keeps the verdicts
+  that succeeded, warns on stderr, and exits non-zero only when
+  every row failed.
 - **Summariser failure no longer crashes the verdict** (both SDKs).
   If the summarisation LLM call raises, the engine logs a warning and
   returns the transcript with `summary=None`/`undefined`. Persona

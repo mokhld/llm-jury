@@ -17,4 +17,9 @@ export type PersonaResponse = {
   rawResponse?: string;
   tokensUsed?: number;
   costUsd?: number;
+  // True when this response is a placeholder for a persona whose LLM call
+  // failed or returned unparseable output. Failed responses stay in the
+  // transcript for auditability but carry no vote: judges, consensus
+  // checks, and prompt builders all skip them.
+  failed?: boolean;
 };

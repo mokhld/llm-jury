@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal, overload
 
 from llm_jury.classifiers.base import ClassificationResult, Classifier
 from llm_jury.debate.engine import DebateConfig, DebateEngine
@@ -183,13 +184,22 @@ class Jury:
                     judge_strategy="cost_guard_primary_fallback",
                     total_duration_ms=int((time.perf_counter() - start) * 1000),
                     total_cost_usd=transcript.total_cost_usd,
+                    persona_failures=transcript.persona_failures,
                 )
 
         verdict = await self.judge.judge(transcript, self.classifier.labels)
 
-        # Jury is authoritative for `was_escalated`: it KNOWS this code path is
-        # the escalation branch, so judges can't override it.
+        # Jury is authoritative for `was_escalated` and `persona_failures`:
+        # it KNOWS this code path is the escalation branch and it holds the
+        # transcript, so judges can't override either.
         verdict.was_escalated = True
+        verdict.persona_failures = transcript.persona_failures
+        if verdict.persona_failures:
+            self.logger.warning(
+                "[llm-jury] verdict is degraded: %d persona call(s) failed "
+                "during the debate",
+                verdict.persona_failures,
+            )
 
         # Backfill fields the judge may have left at their default/unset value.
         # Custom judges that populated these intentionally are respected.
@@ -207,16 +217,49 @@ class Jury:
 
         return verdict
 
+    @overload
     async def classify_batch(
-        self, texts: list[str], concurrency: int = 10
-    ) -> list[Verdict]:
+        self,
+        texts: list[str],
+        concurrency: int = 10,
+        return_exceptions: Literal[False] = False,
+    ) -> list[Verdict]: ...
+
+    @overload
+    async def classify_batch(
+        self,
+        texts: list[str],
+        concurrency: int = 10,
+        *,
+        return_exceptions: Literal[True],
+    ) -> list[Verdict | BaseException]: ...
+
+    async def classify_batch(
+        self,
+        texts: list[str],
+        concurrency: int = 10,
+        return_exceptions: bool = False,
+    ) -> list[Verdict] | list[Verdict | BaseException]:
+        """Classify many texts concurrently.
+
+        With ``return_exceptions=False`` (default) the first failing text
+        raises and the whole batch is lost, mirroring ``asyncio.gather``.
+        Pass ``return_exceptions=True`` to receive the exception object in
+        that text's slot instead, so one bad row cannot discard the verdicts
+        (and spend) of the rows that succeeded.
+        """
         sem = asyncio.Semaphore(max(1, concurrency))
 
         async def _classify(text: str) -> Verdict:
             async with sem:
                 return await self.classify(text)
 
-        return list(await asyncio.gather(*[_classify(text) for text in texts]))
+        return list(
+            await asyncio.gather(
+                *[_classify(text) for text in texts],
+                return_exceptions=return_exceptions,
+            )
+        )
 
     def _should_escalate(self, result: ClassificationResult) -> bool:
         if self.escalation_override is not None:

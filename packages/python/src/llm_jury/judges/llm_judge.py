@@ -5,7 +5,7 @@ from llm_jury.debate.engine import DebateTranscript
 from llm_jury.llm.client import LiteLLMClient, LLMClient
 from llm_jury.utils import clamp_confidence, safe_json_parse, strip_markdown_fences
 
-from .base import JudgeStrategy, Verdict
+from .base import JudgeStrategy, Verdict, _fallback_verdict, _usable_responses
 
 
 class LLMJudge(JudgeStrategy):
@@ -43,6 +43,16 @@ class LLMJudge(JudgeStrategy):
         self.llm_client = llm_client or LiteLLMClient()
 
     async def judge(self, transcript: DebateTranscript, labels: list[str]) -> Verdict:
+        # If every persona call failed there is nothing to judge — skip the
+        # LLM call (it would only see failure placeholders) and fall back to
+        # the primary classifier result.
+        if not any(_usable_responses(round_) for round_ in transcript.rounds):
+            return _fallback_verdict(
+                transcript,
+                "llm_judge_fallback_personas_failed",
+                "All persona calls failed; returning primary classifier result.",
+            )
+
         prompt = self._build_prompt(transcript, labels)
         payload = await self.llm_client.complete(
             model=self.model,
@@ -90,13 +100,16 @@ class LLMJudge(JudgeStrategy):
         ]
 
         for round_idx, round_responses in enumerate(transcript.rounds):
+            valid = _usable_responses(round_responses)
+            if not valid:
+                continue
             heading = (
                 "Initial Expert Opinions"
                 if round_idx == 0
                 else f"Revised Opinions (Round {round_idx + 1})"
             )
             lines.append(f"\n{heading}:")
-            for response in round_responses:
+            for response in valid:
                 lines.append(
                     f"- {response.persona_name}: {response.label} ({response.confidence:.2f}) | "
                     f"Reasoning: {response.reasoning}"

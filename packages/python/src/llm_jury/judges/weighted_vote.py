@@ -4,7 +4,13 @@ from collections import defaultdict
 
 from llm_jury.debate.engine import DebateTranscript
 
-from .base import JudgeStrategy, Verdict, _fallback_verdict
+from .base import (
+    _ALL_FAILED_REASON,
+    JudgeStrategy,
+    Verdict,
+    _fallback_verdict,
+    _usable_responses,
+)
 
 
 class WeightedVoteJudge(JudgeStrategy):
@@ -12,7 +18,10 @@ class WeightedVoteJudge(JudgeStrategy):
         if not transcript.rounds or not transcript.rounds[-1]:
             return _fallback_verdict(transcript, "weighted_vote")
 
-        final_round = transcript.rounds[-1]
+        final_round = _usable_responses(transcript.rounds[-1])
+        if not final_round:
+            return _fallback_verdict(transcript, "weighted_vote", _ALL_FAILED_REASON)
+
         scores: dict[str, float] = defaultdict(float)
 
         for response in final_round:

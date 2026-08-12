@@ -46,6 +46,19 @@ export type DebateTranscript = {
   totalCostUsd: number | null;
 };
 
+/** Responses that carry a real vote (persona call and parse succeeded). */
+export function validResponses(responses: PersonaResponse[]): PersonaResponse[] {
+  return responses.filter((response) => !response.failed);
+}
+
+/** Number of persona calls across all rounds that failed. */
+export function countPersonaFailures(rounds: PersonaResponse[][]): number {
+  return rounds.reduce(
+    (total, round) => total + round.filter((response) => response.failed).length,
+    0,
+  );
+}
+
 export class DebateConfig {
   mode: DebateMode;
   maxRounds: number;
@@ -175,6 +188,24 @@ export class DebateEngine {
         };
       }
 
+      // If every persona call failed (bad API key, provider outage),
+      // further rounds and the summariser are doomed too — stop paying
+      // for them. The failed round stays in the transcript for audit.
+      if (validResponses(firstRound).length === 0) {
+        this.logger.warn(
+          "[llm-jury] all persona calls failed in the opening round; aborting debate early",
+          { personas: firstRound.length },
+        );
+        return {
+          inputText: text,
+          primaryResult,
+          rounds,
+          durationMs: Date.now() - start,
+          totalTokens,
+          totalCostUsd,
+        };
+      }
+
       for (let i = 1; i < Math.max(1, this.config.maxRounds); i += 1) {
         const current = await this.runDeliberationRound(text, primaryResult, labels, rounds, maxCostUsd, totalCostUsd);
         rounds.push(current);
@@ -184,6 +215,13 @@ export class DebateEngine {
         });
 
         if (maxCostUsd != null && totalCostUsd > maxCostUsd) {
+          break;
+        }
+        if (validResponses(current).length === 0) {
+          this.logger.warn(
+            "[llm-jury] all persona calls failed in a deliberation round; halting further rounds",
+            { personas: current.length },
+          );
           break;
         }
         if (this.consensusReached(current)) {
@@ -316,6 +354,7 @@ export class DebateEngine {
       keyFactors: [],
       tokensUsed: 0,
       costUsd: 0,
+      failed: true,
     };
   }
 
@@ -386,8 +425,12 @@ export class DebateEngine {
     if (priorRounds.length > 0) {
       parts.push("## Previous Assessments\n");
       priorRounds.forEach((roundResponses, idx) => {
+        const valid = validResponses(roundResponses);
+        if (valid.length === 0) {
+          return;
+        }
         parts.push(`\n### Round ${idx + 1}\n`);
-        for (const response of roundResponses) {
+        for (const response of valid) {
           parts.push(
             `**${response.personaName}**: ${response.label} (confidence: ${response.confidence.toFixed(2)})\n` +
               `Reasoning: ${response.reasoning}\n`,
@@ -424,12 +467,16 @@ export class DebateEngine {
 
     if (priorRounds.length > 0) {
       priorRounds.forEach((roundResponses, idx) => {
+        const valid = validResponses(roundResponses);
+        if (valid.length === 0) {
+          return;
+        }
         if (idx === 0) {
           parts.push("## Initial Expert Opinions\n");
         } else {
           parts.push(`## Revised Opinions (Round ${idx + 1})\n`);
         }
-        for (const response of roundResponses) {
+        for (const response of valid) {
           parts.push(
             `**${response.personaName}**: ${response.label} (confidence: ${response.confidence.toFixed(2)})\n` +
               `Reasoning: ${response.reasoning}\n`,
@@ -455,12 +502,16 @@ export class DebateEngine {
     parts.push(`## Available Labels\n\n${labels.join(", ")}\n`);
     parts.push("## Expert Debate\n");
     rounds.forEach((roundResponses, idx) => {
+      const valid = validResponses(roundResponses);
+      if (valid.length === 0) {
+        return;
+      }
       if (idx === 0) {
         parts.push("\n### Initial Expert Opinions\n");
       } else {
         parts.push(`\n### Revised Opinions (Round ${idx + 1})\n`);
       }
-      for (const response of roundResponses) {
+      for (const response of valid) {
         parts.push(
           `**${response.personaName}**: ${response.label} (confidence: ${response.confidence.toFixed(2)})\n` +
             `Reasoning: ${response.reasoning}\n`,
@@ -500,6 +551,7 @@ export class DebateEngine {
         confidence: 0,
         reasoning: `Failed to parse persona response: ${raw.slice(0, 200)}`,
         keyFactors: [],
+        failed: true,
       };
     }
 
@@ -516,10 +568,14 @@ export class DebateEngine {
   }
 
   consensusReached(roundResponses: PersonaResponse[]): boolean {
-    if (roundResponses.length === 0) {
+    // Failed responses are placeholders, not votes: a round where two
+    // personas agree and a third errored is real consensus, and a round
+    // of pure failures is not unanimous agreement.
+    const valid = validResponses(roundResponses);
+    if (valid.length === 0) {
       return false;
     }
-    const labels = new Set(roundResponses.map((r) => r.label));
+    const labels = new Set(valid.map((r) => r.label));
     if (labels.size === 1) {
       return true;
     }
@@ -528,7 +584,7 @@ export class DebateEngine {
     // rarely changes the verdict — let the judge break the tie now.
     const threshold = this.config.earlyStopMinConfidence;
     if (threshold !== undefined) {
-      const minConfidence = Math.min(...roundResponses.map((r) => r.confidence));
+      const minConfidence = Math.min(...valid.map((r) => r.confidence));
       if (minConfidence >= threshold) {
         return true;
       }

@@ -1,13 +1,19 @@
+import { validResponses } from "../debate/engine.ts";
 import type { DebateTranscript } from "../debate/engine.ts";
-import { Verdict, fallbackVerdict } from "./base.ts";
+import { ALL_FAILED_REASON, Verdict, fallbackVerdict } from "./base.ts";
 import type { JudgeStrategy } from "./base.ts";
 
 export class WeightedVoteJudge implements JudgeStrategy {
   async judge(transcript: DebateTranscript, _labels: string[]): Promise<Verdict> {
-    const finalRound = transcript.rounds[transcript.rounds.length - 1] ?? [];
+    const lastRound = transcript.rounds[transcript.rounds.length - 1] ?? [];
 
-    if (finalRound.length === 0) {
+    if (lastRound.length === 0) {
       return fallbackVerdict(transcript, "weighted_vote");
+    }
+
+    const finalRound = validResponses(lastRound);
+    if (finalRound.length === 0) {
+      return fallbackVerdict(transcript, "weighted_vote", ALL_FAILED_REASON);
     }
 
     const scores = new Map<string, number>();
