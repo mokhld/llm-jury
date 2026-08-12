@@ -238,8 +238,25 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       maxDebateCostUsd,
     });
 
-    const verdicts = await jury.classifyBatch(texts, isMockClassifier ? 1 : concurrency);
-    writeJsonl(output, verdicts.map((verdict) => toSnakeCaseObject(verdict)));
+    const results = await jury.classifyBatch(texts, isMockClassifier ? 1 : concurrency, true);
+    let failures = 0;
+    const outputRows = results.map((result, idx) => {
+      if (result instanceof Error) {
+        failures += 1;
+        return { text: texts[idx], error: `${result.name}: ${result.message}` };
+      }
+      return toSnakeCaseObject(result);
+    });
+    writeJsonl(output, outputRows);
+    if (failures > 0) {
+      process.stderr.write(
+        `Warning: ${failures} of ${outputRows.length} row(s) failed; ` +
+          "failed rows contain an 'error' field instead of a verdict.\n",
+      );
+      if (failures === outputRows.length) {
+        return 1;
+      }
+    }
     return 0;
   }
 

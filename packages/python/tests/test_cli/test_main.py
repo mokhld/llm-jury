@@ -65,6 +65,69 @@ class CLITests(unittest.TestCase):
             self.assertIn("label", first)
             self.assertIn("was_escalated", first)
 
+    def test_classify_records_per_row_errors_without_losing_batch(self) -> None:
+        from unittest.mock import patch
+
+        from llm_jury.jury.core import Jury
+
+        original_classify = Jury.classify
+
+        async def flaky_classify(self: Jury, text: str):
+            if text == "boom":
+                raise RuntimeError("row failed")
+            return await original_classify(self, text)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "input.jsonl"
+            output_path = Path(tmp) / "output.jsonl"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "text": "boom",
+                                "predicted_label": "safe",
+                                "predicted_confidence": 0.95,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "text": "fine",
+                                "predicted_label": "safe",
+                                "predicted_confidence": 0.95,
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(Jury, "classify", flaky_classify):
+                main(
+                    [
+                        "classify",
+                        "--input",
+                        str(input_path),
+                        "--output",
+                        str(output_path),
+                        "--classifier",
+                        "function",
+                        "--judge",
+                        "majority",
+                        "--labels",
+                        "safe,unsafe",
+                    ]
+                )
+
+            lines = output_path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(lines), 2)
+            error_row = json.loads(lines[0])
+            ok_row = json.loads(lines[1])
+            self.assertIn("RuntimeError", error_row["error"])
+            self.assertEqual(error_row["text"], "boom")
+            self.assertEqual(ok_row["label"], "safe")
+
     def test_calibrate_prints_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "calib.jsonl"

@@ -4,7 +4,13 @@ from collections import Counter
 
 from llm_jury.debate.engine import DebateTranscript
 
-from .base import JudgeStrategy, Verdict, _fallback_verdict
+from .base import (
+    _ALL_FAILED_REASON,
+    JudgeStrategy,
+    Verdict,
+    _fallback_verdict,
+    _usable_responses,
+)
 
 
 class MajorityVoteJudge(JudgeStrategy):
@@ -12,7 +18,10 @@ class MajorityVoteJudge(JudgeStrategy):
         if not transcript.rounds or not transcript.rounds[-1]:
             return _fallback_verdict(transcript, "majority_vote")
 
-        final_round = transcript.rounds[-1]
+        final_round = _usable_responses(transcript.rounds[-1])
+        if not final_round:
+            return _fallback_verdict(transcript, "majority_vote", _ALL_FAILED_REASON)
+
         counts = Counter(response.label for response in final_round)
         winner, winner_count = counts.most_common(1)[0]
         confidence = winner_count / len(final_round)

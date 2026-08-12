@@ -1,8 +1,9 @@
 import type { LLMClient } from "../llm/client.ts";
 import { LiteLLMClient } from "../llm/client.ts";
+import { validResponses } from "../debate/engine.ts";
 import type { DebateTranscript } from "../debate/engine.ts";
 import { DEFAULT_MODEL } from "../defaults.ts";
-import { Verdict } from "./base.ts";
+import { Verdict, fallbackVerdict } from "./base.ts";
 import type { JudgeStrategy } from "./base.ts";
 import { NOOP_LOGGER } from "../logger.ts";
 import type { Logger } from "../logger.ts";
@@ -63,6 +64,17 @@ export class LLMJudge implements JudgeStrategy {
   }
 
   async judge(transcript: DebateTranscript, labels: string[]): Promise<Verdict> {
+    // If every persona call failed there is nothing to judge — skip the
+    // LLM call (it would only see failure placeholders) and fall back to
+    // the primary classifier result.
+    if (!transcript.rounds.some((round) => validResponses(round).length > 0)) {
+      return fallbackVerdict(
+        transcript,
+        "llm_judge_fallback_personas_failed",
+        "All persona calls failed; returning primary classifier result.",
+      );
+    }
+
     const prompt = this.buildPrompt(transcript, labels);
     const payload = await this.llmClient.complete(this.model, this.systemPrompt, prompt, this.temperature);
     const totalCostUsd = sumCosts(transcript.totalCostUsd, payload.costUsd);
@@ -107,12 +119,16 @@ export class LLMJudge implements JudgeStrategy {
     lines.push("Debate transcript:");
 
     transcript.rounds.forEach((round, index) => {
+      const valid = validResponses(round);
+      if (valid.length === 0) {
+        return;
+      }
       if (index === 0) {
         lines.push("Initial Expert Opinions:");
       } else {
         lines.push(`Revised Opinions (Round ${index + 1}):`);
       }
-      round.forEach((response) => {
+      valid.forEach((response) => {
         lines.push(
           `- ${response.personaName}: ${response.label} (${Number(response.confidence).toFixed(2)}) | Reasoning: ${response.reasoning}`,
         );

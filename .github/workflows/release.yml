@@ -47,9 +47,15 @@ jobs:
           # packages/python/pyproject.toml
           sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" packages/python/pyproject.toml
 
+          # packages/python/src/llm_jury/_version.py (stamped into Verdict.library_version)
+          sed -i "s/^__version__ = \".*\"/__version__ = \"${VERSION}\"/" packages/python/src/llm_jury/_version.py
+
           # packages/typescript/package.json
           tmp=$(mktemp)
           jq --arg v "$VERSION" '.version = $v' packages/typescript/package.json > "$tmp" && mv "$tmp" packages/typescript/package.json
+
+          # packages/typescript/src/_version.ts (stamped into Verdict.libraryVersion)
+          sed -i "s/^export const LIBRARY_VERSION = \".*\";/export const LIBRARY_VERSION = \"${VERSION}\";/" packages/typescript/src/_version.ts
 
       - name: Validate all versions match
         env:
@@ -68,10 +74,20 @@ jobs:
           if not m or m.group(1) != expected:
               errors.append(f"pyproject.toml: expected {expected}, found {m.group(1) if m else 'MISSING'}")
 
+          version_py = Path("packages/python/src/llm_jury/_version.py").read_text()
+          m = re.search(r'^__version__\s*=\s*"(.+?)"', version_py, re.MULTILINE)
+          if not m or m.group(1) != expected:
+              errors.append(f"_version.py: expected {expected}, found {m.group(1) if m else 'MISSING'}")
+
           # TypeScript
           ts = json.loads(Path("packages/typescript/package.json").read_text())
           if ts["version"] != expected:
               errors.append(f"package.json (ts): expected {expected}, found {ts['version']}")
+
+          version_ts = Path("packages/typescript/src/_version.ts").read_text()
+          m = re.search(r'^export const LIBRARY_VERSION = "(.+?)";', version_ts, re.MULTILINE)
+          if not m or m.group(1) != expected:
+              errors.append(f"_version.ts: expected {expected}, found {m.group(1) if m else 'MISSING'}")
 
           if errors:
               raise SystemExit("\n".join(errors))
@@ -84,7 +100,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add packages/python/pyproject.toml packages/typescript/package.json
+          git add packages/python/pyproject.toml packages/python/src/llm_jury/_version.py \
+            packages/typescript/package.json packages/typescript/src/_version.ts
           if ! git diff --cached --quiet; then
             git commit -m "release: v${VERSION}"
             git push origin main

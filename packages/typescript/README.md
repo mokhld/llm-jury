@@ -275,12 +275,13 @@ import {
 Methods:
 
 - `await classify(text)` — classify a single input
-- `await classifyBatch(texts, concurrency=10)` — classify multiple inputs
+- `await classifyBatch(texts, concurrency = 10, returnExceptions = false)` — classify multiple inputs. With `returnExceptions: true`, a failing text yields its `Error` in-slot instead of rejecting the whole batch.
 
 Behavior notes:
 
 - Escalation condition is strictly `< threshold` (exactly equal does not escalate).
 - If `personas` is empty, jury escalation is effectively disabled.
+- Failed persona calls (LLM error or unparseable output) are kept in the transcript as placeholders with `failed: true` but carry no vote. If the whole final round failed, judges return the primary classifier result. `Verdict.personaFailures` counts them and `Verdict.debateDegraded` is true when any persona failed — use it to route degraded verdicts to human review.
 - If `maxDebateCostUsd` is exceeded, result falls back to primary classifier with `judgeStrategy` set to `cost_guard_primary_fallback`.
 - `Jury.estimatedMaxDebateCostUsd` (getter) returns the heuristic upper-bound estimate `personas.length × maxRounds × estimatedCostPerPersonaUsd`. Useful for budgeting before any call.
 - `onCostEstimate` runs after the escalation decision but before any LLM call for the debate, *and* before the `maxDebateCostUsd` guard. Lets you layer per-tenant budgets, time-of-day gates, etc. on top of the hard cap.
@@ -372,6 +373,7 @@ stochastic samples, don't wrap.
 | `verdict.totalCostUsd` is `undefined` / `null` even after a debate | Default `LiteLLMClient` cannot estimate cost (no npm pricing library) | Inject a custom `llmClient` that fills `costUsd`; the SDK forwards it through |
 | `classifyBatch` returns fewer / duplicated results than inputs | This was B1 (fixed) — if you see it on a current version, file a bug | Pin to the latest version; share repro under the audit's `classifyBatch` test pattern |
 | Verdict is never escalated even at very low confidence | `personas: []` silently disables escalation (by design) | Pass at least one persona |
+| `verdict.debateDegraded` is `true` | One or more persona calls failed (auth, rate-limit exhaustion, unparseable output). Failed personas carry no vote; if the whole final round failed, judges return the primary classifier result | Inspect `verdict.personaFailures` and the transcript's `failed` responses; consider routing degraded verdicts to human review |
 | One persona always missing from `verdict.debateTranscript.rounds` | That persona's `model` is invalid / not available to your key. Single-persona failure no longer crashes the verdict (B2 fix) — it's dropped | Pass a `logger` (e.g. `console`) to `new Jury({ ..., logger: console })` to see why |
 | Debate summary is `undefined` even in deliberation mode | Summariser LLM call failed; persona rounds are still load-bearing (post-D6 fix) | Same — pass a `logger` to see the warning |
 | Logs are silent in production | Default logger is `NOOP_LOGGER` (parity with Python being opt-in) | `new Jury({ ..., logger: console })` or pass any object matching the `Logger` interface |

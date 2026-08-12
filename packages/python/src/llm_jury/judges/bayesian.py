@@ -4,7 +4,13 @@ from collections import defaultdict
 
 from llm_jury.debate.engine import DebateTranscript
 
-from .base import JudgeStrategy, Verdict, _fallback_verdict
+from .base import (
+    _ALL_FAILED_REASON,
+    JudgeStrategy,
+    Verdict,
+    _fallback_verdict,
+    _usable_responses,
+)
 
 
 class BayesianJudge(JudgeStrategy):
@@ -17,8 +23,12 @@ class BayesianJudge(JudgeStrategy):
         if not transcript.rounds or not transcript.rounds[-1]:
             return _fallback_verdict(transcript, "bayesian")
 
+        final_round = _usable_responses(transcript.rounds[-1])
+        if not final_round:
+            return _fallback_verdict(transcript, "bayesian", _ALL_FAILED_REASON)
+
         posterior: dict[str, float] = defaultdict(lambda: 1.0)
-        for response in transcript.rounds[-1]:
+        for response in final_round:
             for label in labels:
                 prior = self.persona_priors.get(response.persona_name, {}).get(
                     label, 1.0 / max(1, len(labels))

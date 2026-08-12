@@ -68,6 +68,16 @@ class DebateTranscript:
     total_cost_usd: float | None
     summary: str | None = None
 
+    @property
+    def persona_failures(self) -> int:
+        """Number of persona calls across all rounds that failed."""
+        return sum(1 for round_ in self.rounds for r in round_ if r.failed)
+
+
+def _valid_responses(responses: list[PersonaResponse]) -> list[PersonaResponse]:
+    """Responses that carry a real vote (persona call and parse succeeded)."""
+    return [r for r in responses if not r.failed]
+
 
 class DebateEngine:
     def __init__(
@@ -161,6 +171,24 @@ class DebateEngine:
                     total_cost_usd=total_cost,
                 )
 
+            # If every persona call failed (bad API key, provider outage),
+            # further rounds and the summariser are doomed too — stop paying
+            # for them. The failed round stays in the transcript for audit.
+            if not _valid_responses(first_round):
+                logger.warning(
+                    "All %d persona calls failed in the opening round; "
+                    "aborting debate early.",
+                    len(first_round),
+                )
+                return DebateTranscript(
+                    input_text=text,
+                    primary_result=primary_result,
+                    rounds=rounds,
+                    duration_ms=int((time.perf_counter() - start) * 1000),
+                    total_tokens=total_tokens,
+                    total_cost_usd=total_cost,
+                )
+
             # Stage 2: Structured debate rounds (personas engage with prior opinions)
             for _ in range(1, max(1, self.config.max_rounds)):
                 current = await self._run_deliberation_round(
@@ -175,6 +203,13 @@ class DebateEngine:
                     total_cost += float(response.cost_usd or 0.0)
 
                 if max_cost_usd is not None and total_cost > max_cost_usd:
+                    break
+                if not _valid_responses(current):
+                    logger.warning(
+                        "All %d persona calls failed in a deliberation round; "
+                        "halting further rounds.",
+                        len(current),
+                    )
                     break
                 if self._consensus_reached(current):
                     break
@@ -290,6 +325,7 @@ class DebateEngine:
             confidence=0.0,
             reasoning=f"Persona call failed: {type(error).__name__}: {error}",
             key_factors=[],
+            failed=True,
         )
 
     # ------------------------------------------------------------------
@@ -359,13 +395,16 @@ class DebateEngine:
         ]
 
         for r_idx, round_responses in enumerate(rounds):
+            valid = _valid_responses(round_responses)
+            if not valid:
+                continue
             heading = (
                 "Initial Expert Opinions"
                 if r_idx == 0
                 else f"Revised Opinions (Round {r_idx + 1})"
             )
             parts.append(f"## {heading}\n")
-            for resp in round_responses:
+            for resp in valid:
                 parts.append(
                     f"**{resp.persona_name}**: {resp.label} (confidence: {resp.confidence:.2f})\n"
                     f"Reasoning: {resp.reasoning}\n"
@@ -427,8 +466,11 @@ class DebateEngine:
         if prior_rounds:
             parts.append("## Previous Assessments\n")
             for idx, round_responses in enumerate(prior_rounds):
+                valid = _valid_responses(round_responses)
+                if not valid:
+                    continue
                 parts.append(f"\n### Round {idx + 1}\n")
-                for response in round_responses:
+                for response in valid:
                     parts.append(
                         f"**{response.persona_name}**: {response.label} (confidence: {response.confidence:.2f})\n"
                         f"Reasoning: {response.reasoning}\n"
@@ -464,16 +506,21 @@ class DebateEngine:
             )
 
         if prior_rounds:
-            parts.append("## Initial Expert Opinions\n")
-            for response in prior_rounds[0]:
-                parts.append(
-                    f"**{response.persona_name}**: {response.label} (confidence: {response.confidence:.2f})\n"
-                    f"Reasoning: {response.reasoning}\n"
-                )
+            first_valid = _valid_responses(prior_rounds[0])
+            if first_valid:
+                parts.append("## Initial Expert Opinions\n")
+                for response in first_valid:
+                    parts.append(
+                        f"**{response.persona_name}**: {response.label} (confidence: {response.confidence:.2f})\n"
+                        f"Reasoning: {response.reasoning}\n"
+                    )
 
             for r_idx in range(1, len(prior_rounds)):
+                valid = _valid_responses(prior_rounds[r_idx])
+                if not valid:
+                    continue
                 parts.append(f"\n## Revised Opinions (Round {r_idx + 1})\n")
-                for response in prior_rounds[r_idx]:
+                for response in valid:
                     parts.append(
                         f"**{response.persona_name}**: {response.label} (confidence: {response.confidence:.2f})\n"
                         f"Reasoning: {response.reasoning}\n"
@@ -523,6 +570,7 @@ class DebateEngine:
                 confidence=0.0,
                 reasoning=f"Failed to parse persona response as JSON: {raw[:200]}",
                 key_factors=[],
+                failed=True,
             )
 
         dissent_raw = payload.get("dissent_notes")
@@ -539,9 +587,13 @@ class DebateEngine:
         )
 
     def _consensus_reached(self, round_responses: list[PersonaResponse]) -> bool:
-        if not round_responses:
+        # Failed responses are placeholders, not votes: a round where two
+        # personas agree and a third errored is real consensus, and a round
+        # of pure failures is not unanimous agreement on labels[0].
+        valid = _valid_responses(round_responses)
+        if not valid:
             return False
-        labels = [response.label for response in round_responses]
+        labels = [response.label for response in valid]
         if len(set(labels)) == 1:
             return True
         # F7: high-confidence early stop. When every persona this
@@ -550,7 +602,7 @@ class DebateEngine:
         # break the tie now instead of paying for another round.
         threshold = self.config.early_stop_min_confidence
         if threshold is not None:
-            min_confidence = min(r.confidence for r in round_responses)
+            min_confidence = min(r.confidence for r in valid)
             if min_confidence >= threshold:
                 return True
         return False

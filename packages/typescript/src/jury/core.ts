@@ -1,5 +1,5 @@
 import type { ClassificationResult, Classifier } from "../classifiers/base.ts";
-import { DebateConfig, DebateEngine } from "../debate/engine.ts";
+import { DebateConfig, DebateEngine, countPersonaFailures } from "../debate/engine.ts";
 import { LiteLLMClient } from "../llm/client.ts";
 import type { LLMClient } from "../llm/client.ts";
 import type { Persona } from "../personas/base.ts";
@@ -186,10 +186,14 @@ export class Jury {
         judgeStrategy: "cost_guard_primary_fallback",
         totalDurationMs: Date.now() - start,
         totalCostUsd: transcript.totalCostUsd,
+        personaFailures: countPersonaFailures(transcript.rounds),
       });
     }
 
     const verdict = await this.judge.judge(transcript, this.classifier.labels);
+    // Jury is authoritative for wasEscalated and personaFailures: it KNOWS
+    // this code path is the escalation branch and it holds the transcript,
+    // so judges can't override either.
     verdict.wasEscalated = true;
     verdict.primaryResult = primary;
     verdict.debateTranscript = transcript;
@@ -197,18 +201,44 @@ export class Jury {
     if (verdict.totalCostUsd == null) {
       verdict.totalCostUsd = transcript.totalCostUsd;
     }
+    verdict.personaFailures = countPersonaFailures(transcript.rounds);
+    if (verdict.personaFailures > 0) {
+      this.logger.warn("[llm-jury] verdict is degraded: persona call(s) failed during the debate", {
+        personaFailures: verdict.personaFailures,
+      });
+    }
 
     this.onVerdict?.(verdict);
     return verdict;
   }
 
-  async classifyBatch(texts: string[], concurrency = 10): Promise<Verdict[]> {
+  /**
+   * Classify many texts concurrently.
+   *
+   * With `returnExceptions` unset (default) the first failing text rejects
+   * and the whole batch is lost, mirroring `Promise.all`. Pass
+   * `returnExceptions: true` to receive the `Error` in that text's slot
+   * instead, so one bad row cannot discard the verdicts (and spend) of the
+   * rows that succeeded.
+   */
+  async classifyBatch(texts: string[], concurrency?: number, returnExceptions?: false): Promise<Verdict[]>;
+  async classifyBatch(texts: string[], concurrency: number | undefined, returnExceptions: true): Promise<Array<Verdict | Error>>;
+  async classifyBatch(
+    texts: string[],
+    concurrency = 10,
+    returnExceptions = false,
+  ): Promise<Verdict[] | Array<Verdict | Error>> {
     const semaphore = createSemaphore(Math.max(1, concurrency));
     return Promise.all(
       texts.map(async (text) => {
         await semaphore.acquire();
         try {
           return await this.classify(text);
+        } catch (err) {
+          if (!returnExceptions) {
+            throw err;
+          }
+          return err instanceof Error ? err : new Error(String(err));
         } finally {
           semaphore.release();
         }

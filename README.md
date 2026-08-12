@@ -354,6 +354,8 @@ When confidence is too low, the input goes through persona debate and a judge pr
 | `judge_strategy` | `judgeStrategy` | `str` / `string` | Strategy that produced the verdict |
 | `total_duration_ms` | `totalDurationMs` | `int` / `number` | Wall-clock time (ms) |
 | `total_cost_usd` | `totalCostUsd` | `float \| None` / `number \| null` | API cost in USD |
+| `persona_failures` | `personaFailures` | `int` / `number` | Persona calls across the debate that failed (LLM error or unparseable output) |
+| `debate_degraded` | `debateDegraded` | `bool` / `boolean` | True when `persona_failures > 0` — the verdict was decided by fewer jurors than configured. Useful for routing to human review |
 
 ### Persona response fields
 
@@ -367,6 +369,7 @@ When confidence is too low, the input goes through persona debate and a judge pr
 | `dissent_notes` | `dissentNotes` | `str \| None` / `string \| null` | Rebuttal in deliberation/adversarial modes |
 | `tokens_used` | `tokensUsed` | `int` / `number` | Tokens consumed |
 | `cost_usd` | `costUsd` | `float \| None` / `number \| null` | API cost for this call |
+| `failed` | `failed` | `bool` / `boolean?` | True when this response is a placeholder for a failed persona call. Failed responses stay in the transcript for audit but carry no vote |
 
 `DebateTranscript` also includes `summary` (Python: `str | None`, TypeScript: `string?`) — a structured summary produced during the Summarisation stage of the deliberation pipeline (null/undefined in non-deliberation modes).
 
@@ -485,8 +488,10 @@ response_format)`. See per-package READMEs for usage.
 
 Methods:
 
-- Python: `await classify(text)`, `await classify_batch(texts, concurrency=10)`
-- TypeScript: `await classify(text)`, `await classifyBatch(texts, concurrency=10)`
+- Python: `await classify(text)`, `await classify_batch(texts, concurrency=10, return_exceptions=False)`
+- TypeScript: `await classify(text)`, `await classifyBatch(texts, concurrency=10, returnExceptions=false)`
+
+By default a failing text rejects the whole batch. Pass `return_exceptions=True` / `returnExceptions: true` to get the exception in that text's slot instead, so one bad row cannot discard the verdicts (and spend) of the rows that succeeded.
 
 Behavior notes:
 
@@ -669,6 +674,7 @@ The most common gotchas across both SDKs. For the full list with code examples, 
 | `judge_strategy` / `judgeStrategy` is `cost_guard_primary_fallback` | Actual mid-debate spend hit the cap mid-flight | Same — and note spend can still overshoot by up to one concurrency-batch |
 | `judge_strategy` / `judgeStrategy` is `cost_guard_user_override` | Your `on_cost_estimate` / `onCostEstimate` callback returned False | Working as intended — debate skipped per your policy |
 | Verdict is never escalated even at low confidence | `personas=[]` silently disables escalation (by design) | Pass at least one persona |
+| `debate_degraded` / `debateDegraded` is true | One or more persona calls failed (auth, rate-limit exhaustion, unparseable output). Failed personas carry no vote; if the whole panel failed the primary classifier result is returned | Inspect `persona_failures` / `personaFailures` and the transcript's `failed` responses; consider routing degraded verdicts to human review |
 | `total_cost_usd` / `totalCostUsd` is `None` / `undefined` | Python: model not in litellm's pricing table. TypeScript: no built-in cost estimation (no viable npm library) | Python: pin to a known-priced model. TS: inject a custom `llmClient` that fills `costUsd` |
 | TypeScript logs are silent | TS `Jury` defaults to `NOOP_LOGGER` | `new Jury({ ..., logger: console })` |
 | TypeScript hangs ~60s then aborts | Default `timeoutMs = 60_000` | `new LiteLLMClient({ timeoutMs: 30_000 })` |
