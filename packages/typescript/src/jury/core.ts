@@ -148,6 +148,29 @@ export class Jury {
     }
 
     this._stats.escalated += 1;
+    return this.runEscalation(text, primary, start);
+  }
+
+  /**
+   * Run the escalation branch for a primary result you already have.
+   *
+   * Skips the primary classifier and the threshold check, then does what
+   * `classify` does for an escalated item: fires `onEscalation`, applies the
+   * `onCostEstimate` gate and the cost guards, runs the debate and the judge,
+   * and fires `onVerdict`. It does not update `stats`. `totalDurationMs`
+   * counts from this call, so it leaves out the primary classifier's time.
+   * `classify` runs the same code for every item it escalates.
+   *
+   * Throws when the jury has no personas, because there is no one to debate.
+   */
+  async escalate(text: string, primary: ClassificationResult): Promise<Verdict> {
+    if (this.personas.length === 0) {
+      throw new Error("Jury.escalate needs at least one persona; this jury has none.");
+    }
+    return this.runEscalation(text, primary, Date.now());
+  }
+
+  private async runEscalation(text: string, primary: ClassificationResult, start: number): Promise<Verdict> {
     this.logger.info("[llm-jury] escalating to debate", {
       label: primary.label,
       confidence: primary.confidence,

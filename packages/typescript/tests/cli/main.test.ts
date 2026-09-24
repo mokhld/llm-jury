@@ -15,6 +15,7 @@ import {
 } from "../../src/cli/main.ts";
 import { Verdict } from "../../src/judges/base.ts";
 import { Jury } from "../../src/jury/core.ts";
+import { FakeLLMClient } from "../helpers.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "llm-jury-ts-"));
@@ -515,4 +516,153 @@ test("classify on an empty input writes an empty file", async () => {
   );
   assert.equal(result, 0);
   assert.equal(readFileSync(outputPath, "utf8"), "");
+});
+
+// --- eval and calibrate --use-jury (FEAT-01) --------------------------------
+
+const EVAL_ROWS = [
+  // Confident and right: never debated at --band-upper 0.95.
+  { text: "t1", label: "safe", predicted_label: "safe", predicted_confidence: 0.99 },
+  // Unsure and wrong: the fake personas answer "safe" and fix it.
+  { text: "t2", label: "safe", predicted_label: "unsafe", predicted_confidence: 0.6 },
+  { text: "t3", label: "unsafe", predicted_label: "unsafe", predicted_confidence: 0.97 },
+];
+
+async function runWithClient(
+  command: "eval" | "calibrate",
+  extra: string[],
+  client = new FakeLLMClient(),
+): Promise<{ result: number; stdout: string; stderr: string; client: FakeLLMClient }> {
+  const dir = tempDir();
+  const inputPath = join(dir, "labelled.jsonl");
+  writeRows(inputPath, EVAL_ROWS);
+  const args = [command, "--input", inputPath, "--labels", "safe,unsafe", ...extra];
+  const output = await captureOutput(() => main(args, { llmClient: client }));
+  return { ...output, client };
+}
+
+test("eval prints the summary, sweep and best threshold", async () => {
+  const dir = tempDir();
+  const outputPath = join(dir, "report.json");
+  const { result, stdout, client } = await runWithClient("eval", [
+    "--judge",
+    "majority",
+    "--thresholds",
+    "0.5,0.7,0.9",
+    "--output",
+    outputPath,
+  ]);
+  assert.equal(result, 0);
+  const payload = JSON.parse(stdout);
+  assert.deepEqual(Object.keys(payload), ["best_threshold", "summary", "sweep"]);
+  const summary = payload.summary;
+  assert.equal(summary.n, 3);
+  assert.equal(summary.debated, 1);
+  assert.equal(summary.flips_helped, 1);
+  assert.equal(summary.flips_hurt, 0);
+  assert.ok(Math.abs(summary.debate_cost_usd - 0.003) < 1e-12);
+  assert.equal(summary.unpriced_calls, 0);
+  assert.deepEqual(
+    payload.sweep.map((row: { threshold: number }) => row.threshold),
+    [0.5, 0.7, 0.9],
+  );
+  assert.deepEqual(Object.keys(payload.sweep[0]), [
+    "threshold",
+    "escalation_rate",
+    "system_accuracy",
+    "jury_accuracy",
+    "primary_accuracy",
+    "errors",
+    "total_cost",
+  ]);
+  assert.equal(payload.best_threshold, 0.7);
+  // Three content_moderation personas, one independent round, no LLM judge.
+  assert.equal(client.calls.length, 3);
+
+  const full = JSON.parse(readFileSync(outputPath, "utf8"));
+  assert.equal(full.best_threshold, 0.7);
+  assert.equal(full.band_upper, 0.95);
+  assert.equal(full.items.length, 3);
+  assert.equal(full.items[1].jury_label, "safe");
+  assert.equal(full.items[0].debated, false);
+});
+
+test("eval uses the injected client for the LLM judge", async () => {
+  const { result, stdout, client } = await runWithClient("eval", []);
+  assert.equal(result, 0);
+  assert.deepEqual(JSON.parse(stdout).summary.fallbacks, {});
+  assert.equal(client.calls.length, 4); // 3 personas + the judge
+});
+
+test("eval --max-escalations stops before any LLM call", async () => {
+  const client = new FakeLLMClient();
+  await assert.rejects(
+    runWithClient("eval", ["--max-escalations", "0"], client),
+    (err: unknown) =>
+      err instanceof CliUsageError && /'--max-escalations'/.test(err.message) && /maxEscalations=0/.test(err.message),
+  );
+  assert.equal(client.calls.length, 0);
+});
+
+test("eval rejects thresholds above --band-upper", async () => {
+  const client = new FakeLLMClient();
+  await assert.rejects(
+    runWithClient("eval", ["--band-upper", "0.8", "--thresholds", "0.9"], client),
+    (err: unknown) => err instanceof CliUsageError && /above --band-upper/.test(err.message),
+  );
+  assert.equal(client.calls.length, 0);
+});
+
+test("eval validates its numeric options", async () => {
+  const cases: Array<[string, string]> = [
+    ["--band-upper", "1.5"],
+    ["--max-escalations", "-1"],
+    ["--max-escalations", "1.5"],
+    ["--thresholds", "0.5,abc"],
+    ["--error-cost", "-1"],
+    ["--escalation-cost", "nan"],
+    ["--concurrency", "0"],
+  ];
+  for (const [flag, value] of cases) {
+    await assert.rejects(
+      runWithClient("eval", [flag, value]),
+      (err: unknown) => err instanceof CliUsageError && err.message.includes(`Invalid value for '${flag}'`),
+      `${flag} ${value}`,
+    );
+  }
+});
+
+test("calibrate --use-jury measures the jury", async () => {
+  const { result, stdout, stderr, client } = await runWithClient("calibrate", ["--use-jury", "--judge", "majority"]);
+  assert.equal(result, 0);
+  const report = JSON.parse(stdout);
+  assert.deepEqual(Object.keys(report), ["best_threshold", "use_jury", "rows", "summary"]);
+  assert.equal(report.use_jury, true);
+  assert.equal(report.summary.debated, 1);
+  assert.equal(report.summary.flips_helped, 1);
+  for (const row of report.rows) {
+    assert.ok("system_accuracy" in row);
+    assert.ok("jury_accuracy" in row);
+  }
+  // t2 (0.6) is wrong unless escalated, so the best threshold escalates it.
+  assert.ok(report.best_threshold > 0.6);
+  assert.equal(client.calls.length, 3);
+  assert.equal(stderr, "");
+});
+
+test("calibrate without --use-jury says jury flags are ignored", async () => {
+  const { result, stdout, stderr, client } = await runWithClient("calibrate", [
+    "--judge",
+    "majority",
+    "--max-rounds",
+    "2",
+  ]);
+  assert.equal(result, 0);
+  assert.equal(JSON.parse(stdout).use_jury, false);
+  assert.match(stderr, /--judge, --max-rounds/);
+  assert.match(stderr, /--use-jury/);
+  assert.equal(client.calls.length, 0);
+
+  const quiet = await runWithClient("calibrate", []);
+  assert.equal(quiet.stderr, "");
 });

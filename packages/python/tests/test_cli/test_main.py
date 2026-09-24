@@ -7,12 +7,13 @@ import sys
 import tempfile
 import types
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import typer
 
 from llm_jury.cli.main import _build_classifier, _check_debate_mode, main
+from tests.helpers import FakeLLMClient
 
 
 def _write_rows(path: Path, rows: list[dict]) -> None:
@@ -447,6 +448,173 @@ class OptionValidationTests(unittest.TestCase):
 
     def test_debate_mode_is_case_insensitive(self) -> None:
         self.assertEqual(_check_debate_mode(" Deliberation "), "deliberation")
+
+
+EVAL_ROWS = [
+    # Confident and right: never debated at --band-upper 0.95.
+    {
+        "text": "t1",
+        "label": "safe",
+        "predicted_label": "safe",
+        "predicted_confidence": 0.99,
+    },
+    # Unsure and wrong: the fake personas answer "safe" and fix it.
+    {
+        "text": "t2",
+        "label": "safe",
+        "predicted_label": "unsafe",
+        "predicted_confidence": 0.6,
+    },
+    {
+        "text": "t3",
+        "label": "unsafe",
+        "predicted_label": "unsafe",
+        "predicted_confidence": 0.97,
+    },
+]
+
+
+class EvalCommandTests(unittest.TestCase):
+    """`llm-jury eval` end to end with an injected fake LLM client."""
+
+    def _run(
+        self, tmp: str, *extra: str, client: FakeLLMClient | None = None
+    ) -> tuple[dict, FakeLLMClient]:
+        input_path = Path(tmp) / "labelled.jsonl"
+        _write_rows(input_path, EVAL_ROWS)
+        client = client or FakeLLMClient()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            main(
+                ["eval", "--input", str(input_path), "--labels", "safe,unsafe", *extra],
+                llm_client=client,
+            )
+        return json.loads(buf.getvalue().strip()), client
+
+    def test_eval_prints_summary_sweep_and_best_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "report.json"
+            payload, client = self._run(
+                tmp,
+                "--judge",
+                "majority",
+                "--thresholds",
+                "0.5,0.7,0.9",
+                "--output",
+                str(output_path),
+            )
+
+            summary = payload["summary"]
+            self.assertEqual(summary["n"], 3)
+            self.assertEqual(summary["debated"], 1)
+            self.assertEqual(summary["flips_helped"], 1)
+            self.assertEqual(summary["flips_hurt"], 0)
+            self.assertAlmostEqual(summary["debate_cost_usd"], 0.003)
+            self.assertEqual(summary["unpriced_calls"], 0)
+            self.assertEqual(
+                [row["threshold"] for row in payload["sweep"]], [0.5, 0.7, 0.9]
+            )
+            self.assertEqual(payload["best_threshold"], 0.7)
+            # Three content_moderation personas, one independent round, no LLM judge.
+            self.assertEqual(len(client.calls), 3)
+
+            full = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(full["best_threshold"], 0.7)
+            self.assertEqual(full["band_upper"], 0.95)
+            self.assertEqual(len(full["items"]), 3)
+            self.assertEqual(full["items"][1]["jury_label"], "safe")
+            self.assertFalse(full["items"][0]["debated"])
+
+    def test_eval_uses_the_injected_client_for_the_llm_judge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            payload, client = self._run(tmp)
+        self.assertEqual(payload["summary"]["fallbacks"], {})
+        self.assertEqual(len(client.calls), 4)  # 3 personas + the judge
+
+    def test_max_escalations_stops_before_any_llm_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeLLMClient()
+            with self.assertRaisesRegex(typer.BadParameter, "max_escalations=0"):
+                self._run(tmp, "--max-escalations", "0", client=client)
+            self.assertEqual(client.calls, [])
+
+    def test_thresholds_above_band_upper_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeLLMClient()
+            with self.assertRaisesRegex(typer.BadParameter, "above --band-upper"):
+                self._run(
+                    tmp, "--band-upper", "0.8", "--thresholds", "0.9", client=client
+                )
+            self.assertEqual(client.calls, [])
+
+    def test_invalid_eval_numbers_are_rejected(self) -> None:
+        cases = [
+            ("--band-upper", "1.5"),
+            ("--max-escalations", "-1"),
+            ("--thresholds", "0.5,abc"),
+            ("--error-cost", "-1"),
+            ("--escalation-cost", "nan"),
+            ("--concurrency", "0"),
+        ]
+        for flag, value in cases:
+            with self.subTest(flag=flag, value=value):
+                with tempfile.TemporaryDirectory() as tmp:
+                    with self.assertRaisesRegex(typer.BadParameter, "must be"):
+                        self._run(tmp, flag, value)
+
+
+class CalibrateUseJuryTests(unittest.TestCase):
+    def _calibrate(
+        self, tmp: str, *extra: str, client: FakeLLMClient | None = None
+    ) -> tuple[dict, str, FakeLLMClient]:
+        input_path = Path(tmp) / "calib.jsonl"
+        _write_rows(input_path, EVAL_ROWS)
+        client = client or FakeLLMClient()
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            main(
+                [
+                    "calibrate",
+                    "--input",
+                    str(input_path),
+                    "--labels",
+                    "safe,unsafe",
+                    *extra,
+                ],
+                llm_client=client,
+            )
+        return json.loads(out.getvalue().strip()), err.getvalue(), client
+
+    def test_use_jury_measures_the_jury(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report, err, client = self._calibrate(
+                tmp, "--use-jury", "--judge", "majority"
+            )
+        self.assertTrue(report["use_jury"])
+        self.assertEqual(report["summary"]["debated"], 1)
+        self.assertEqual(report["summary"]["flips_helped"], 1)
+        for row in report["rows"]:
+            self.assertIn("system_accuracy", row)
+            self.assertIn("jury_accuracy", row)
+        # t2 (0.6) is wrong unless escalated, so the best threshold escalates it.
+        self.assertGreater(report["best_threshold"], 0.6)
+        self.assertEqual(len(client.calls), 3)
+        self.assertEqual(err, "")
+
+    def test_cheap_mode_says_jury_flags_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report, err, client = self._calibrate(
+                tmp, "--judge", "majority", "--max-rounds", "2"
+            )
+        self.assertFalse(report["use_jury"])
+        self.assertIn("--judge, --max-rounds", err)
+        self.assertIn("--use-jury", err)
+        self.assertEqual(client.calls, [])
+
+    def test_cheap_mode_without_jury_flags_prints_no_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, err, _ = self._calibrate(tmp)
+        self.assertEqual(err, "")
 
 
 if __name__ == "__main__":

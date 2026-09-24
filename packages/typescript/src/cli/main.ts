@@ -10,14 +10,26 @@ import { HuggingFaceClassifier } from "../classifiers/huggingFaceAdapter.ts";
 import { LLMClassifier } from "../classifiers/llmClassifier.ts";
 import { DebateConfig, DebateMode } from "../debate/engine.ts";
 import { DEFAULT_MODEL } from "../defaults.ts";
+import { JuryEvaluator, TooManyEscalationsError, sweepRowToDict } from "../evaluation/evaluator.ts";
 import type { Verdict } from "../judges/base.ts";
 import { BayesianJudge } from "../judges/bayesian.ts";
 import { LLMJudge } from "../judges/llmJudge.ts";
 import { MajorityVoteJudge } from "../judges/majorityVote.ts";
 import { WeightedVoteJudge } from "../judges/weightedVote.ts";
 import { Jury } from "../jury/core.ts";
+import type { LLMClient } from "../llm/client.ts";
 import type { Persona } from "../personas/base.ts";
 import { PersonaRegistry } from "../personas/registry.ts";
+
+/** Dependencies `main` can be given instead of the defaults. */
+export type CliDependencies = {
+  /**
+   * Replaces the default LiteLLM client for every LLM call the command makes
+   * (personas, LLM judge, `llm:` classifier), which lets tests and embedding
+   * code run the commands without network access.
+   */
+  llmClient?: LLMClient;
+};
 
 /**
  * Bad command-line usage: an unknown or malformed option, or input the command
@@ -35,7 +47,7 @@ export class CliUsageError extends Error {
 // Option parsing
 // ---------------------------------------------------------------------------
 
-const COMMANDS = ["classify", "calibrate"] as const;
+const COMMANDS = ["classify", "calibrate", "eval"] as const;
 type Command = (typeof COMMANDS)[number];
 
 const COMMON_VALUE_OPTIONS = [
@@ -54,7 +66,37 @@ const COMMON_FLAG_OPTIONS = ["--hide-primary-result", "--hide-confidence"];
 const COMMAND_VALUE_OPTIONS: Record<Command, string[]> = {
   classify: ["--input", "--output", "--threshold", "--concurrency"],
   calibrate: ["--input", "--initial-threshold", "--error-cost", "--escalation-cost"],
+  eval: [
+    "--input",
+    "--output",
+    "--concurrency",
+    "--band-upper",
+    "--max-escalations",
+    "--thresholds",
+    "--error-cost",
+    "--escalation-cost",
+  ],
 };
+const COMMAND_FLAG_OPTIONS: Record<Command, string[]> = {
+  classify: [],
+  calibrate: ["--use-jury"],
+  eval: [],
+};
+
+// Options that only matter when the jury runs; calibrate names the ones it
+// ignores when --use-jury is absent.
+const JURY_OPTIONS = [
+  "--personas",
+  "--judge",
+  "--judge-model",
+  "--persona-model",
+  "--debate-mode",
+  "--max-rounds",
+  "--max-debate-cost",
+  "--debate-concurrency",
+  "--hide-primary-result",
+  "--hide-confidence",
+];
 
 type ParsedOptions = {
   values: Map<string, string>;
@@ -67,7 +109,7 @@ type ParsedOptions = {
  */
 function parseOptions(command: Command, args: string[]): ParsedOptions {
   const valueOptions = new Set([...COMMON_VALUE_OPTIONS, ...COMMAND_VALUE_OPTIONS[command]]);
-  const flagOptions = new Set(COMMON_FLAG_OPTIONS);
+  const flagOptions = new Set([...COMMON_FLAG_OPTIONS, ...COMMAND_FLAG_OPTIONS[command]]);
   const values = new Map<string, string>();
   const flags = new Set<string>();
 
@@ -111,6 +153,7 @@ type NumberRule = { integer?: boolean; min?: number; max?: number; expected: str
 
 const THRESHOLD_RULE: NumberRule = { min: 0, max: 1, expected: "a number between 0 and 1" };
 const COUNT_RULE: NumberRule = { integer: true, min: 1, expected: "an integer >= 1" };
+const LIMIT_RULE: NumberRule = { integer: true, min: 0, expected: "an integer >= 0" };
 const COST_RULE: NumberRule = { min: 0, expected: "a finite number >= 0" };
 
 // Plain decimal notation only: `Number()` alone would also accept "", "0x10"
@@ -140,6 +183,32 @@ function numberOption(options: ParsedOptions, name: string, fallback: number, ru
 function optionalNumberOption(options: ParsedOptions, name: string, rule: NumberRule): number | undefined {
   const raw = options.values.get(name);
   return raw === undefined ? undefined : parseNumber(name, raw, rule);
+}
+
+/** Thresholds passed with --thresholds, or undefined when the flag is absent. */
+function thresholdsOption(options: ParsedOptions, bandUpper: number): number[] | undefined {
+  const raw = options.values.get("--thresholds");
+  if (raw === undefined) {
+    return undefined;
+  }
+  const values = raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const value = parseNumber("--thresholds", part, { ...THRESHOLD_RULE, expected: "numbers between 0 and 1" });
+      if (value > bandUpper) {
+        throw new CliUsageError(
+          `Invalid value for '--thresholds': threshold ${value} is above --band-upper ${bandUpper}; ` +
+            "items at or above --band-upper are not debated, so their jury outcome is not measured.",
+        );
+      }
+      return value;
+    });
+  if (values.length === 0) {
+    throw new CliUsageError("Invalid value for '--thresholds': needs at least one threshold.");
+  }
+  return values;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,10 +310,10 @@ function applyPersonaModel(personas: Persona[], model: string | null): Persona[]
   return personas.map((persona) => ({ ...persona, model }));
 }
 
-function selectJudge(name: string, model: string | null) {
+function selectJudge(name: string, model: string | null, llmClient?: LLMClient) {
   switch (name.trim().toLowerCase()) {
     case "llm":
-      return new LLMJudge({ model: model ?? DEFAULT_MODEL });
+      return new LLMJudge({ model: model ?? DEFAULT_MODEL, llmClient });
     case "majority":
       return new MajorityVoteJudge();
     case "weighted":
@@ -344,13 +413,15 @@ function functionPredictions(rows: Array<Record<string, unknown>>): Map<string, 
  * Build the primary classifier for a spec. `labels` is the label set for the
  * run. `labelsFlag` is what the user passed with --labels (null when absent);
  * the `huggingface:` spec uses it and otherwise takes label names from the
- * model's scores.
+ * model's scores. `llmClient` is used by the `llm:` spec (undefined means the
+ * default LiteLLM client).
  */
 export function buildClassifier(
   classifierSpec: string,
   labels: string[],
   rows: Array<Record<string, unknown>>,
   labelsFlag: string[] | null = null,
+  llmClient?: LLMClient,
 ): { classifier: FunctionClassifier | LLMClassifier | HuggingFaceClassifier; isMockClassifier: boolean } {
   const spec = classifierSpec.trim();
 
@@ -375,7 +446,7 @@ export function buildClassifier(
       throw new CliUsageError("classifier spec 'llm:' requires a model name");
     }
     return {
-      classifier: new LLMClassifier({ model, labels }),
+      classifier: new LLMClassifier({ model, labels, llmClient }),
       isMockClassifier: false,
     };
   }
@@ -401,6 +472,7 @@ function usageText(): string {
     "Commands:",
     "  classify   Classify JSONL inputs and write verdicts JSONL",
     "  calibrate  Calibrate threshold from labeled JSONL",
+    "  eval       Measure the jury against the primary classifier on labeled JSONL",
     "",
     "classify options:",
     "  --input <path>             Input JSONL file (required)",
@@ -412,7 +484,22 @@ function usageText(): string {
     "  --input <path>             Input JSONL file with a ground-truth 'label' field (required)",
     "  --initial-threshold <0-1>  Starting threshold (default 0.7)",
     "  --error-cost <usd>         Cost per classification error (default 10)",
-    "  --escalation-cost <usd>    Cost per escalation (default 0.05)",
+    "  --escalation-cost <usd>    Cost per escalation (default 0.05; with --use-jury, the",
+    "                             measured mean debate cost)",
+    "  --use-jury                 Run the jury on every item below the highest threshold and",
+    "                             pick the threshold from its measured outcomes (LLM calls)",
+    "",
+    "eval options:",
+    "  --input <path>             Input JSONL file with a ground-truth 'label' field (required)",
+    "  --output <path>            Also write the full report, with per-item results, as JSON",
+    "  --band-upper <0-1>         Debate every item whose primary confidence is below this",
+    "                             (default 0.95)",
+    "  --max-escalations <n>      Stop before any debate if more items would be debated",
+    "  --thresholds <list>        Comma-separated thresholds to sweep, each <= --band-upper",
+    "                             (default 0.5,0.55,...,0.95 up to --band-upper)",
+    "  --error-cost <usd>         Cost per wrong final label (default 10)",
+    "  --escalation-cost <usd>    Cost per escalation (default: the measured mean debate cost)",
+    "  --concurrency <n>          Items classified or debated at once (default 5)",
     "",
     "Common options:",
     "  --classifier function|llm:<model>|huggingface:<model>  (default function)",
@@ -435,14 +522,43 @@ function usageText(): string {
     "Examples:",
     "  llm-jury classify --input input.jsonl --output verdicts.jsonl --classifier function --judge majority",
     "  llm-jury calibrate --input calibration.jsonl --classifier function --judge majority",
+    "  llm-jury eval --input labelled.jsonl --judge majority --max-escalations 200 --output report.json",
   ].join("\n");
+}
+
+type LabelledInput = {
+  rows: Array<Record<string, unknown>>;
+  texts: string[];
+  expectedLabels: string[];
+};
+
+/** Rows, texts and ground-truth labels of a calibration or evaluation file. */
+function readLabelledInput(path: string): LabelledInput {
+  const rows = readJsonl(path);
+  if (rows.length === 0) {
+    throw new CliUsageError("Input JSONL is empty.");
+  }
+
+  const missingLabels = rows.filter((row) => row.label == null).length;
+  if (missingLabels > 0) {
+    throw new CliUsageError(
+      `Input requires a ground-truth 'label' field on every row. Missing labels in ${missingLabels} row(s).`,
+    );
+  }
+
+  return {
+    rows,
+    texts: rows.map((row, idx) => String(row.text ?? `row-${idx}`)),
+    expectedLabels: rows.map((row) => String(row.label)),
+  };
 }
 
 /**
  * Run a CLI command. Returns the exit code for completed runs and throws
  * `CliUsageError` for bad usage (`runCli` turns that into exit code 2).
+ * `deps.llmClient` replaces the default LiteLLM client for every LLM call.
  */
-export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
+export async function main(argv: string[] = process.argv.slice(2), deps: CliDependencies = {}): Promise<number> {
   if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${usageText()}\n`);
     return 0;
@@ -455,10 +571,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   const command = argv[0]!;
   if (!(COMMANDS as readonly string[]).includes(command)) {
-    throw new CliUsageError("Supported commands: classify, calibrate");
+    throw new CliUsageError(`Supported commands: ${COMMANDS.join(", ")}`);
   }
   const options = parseOptions(command as Command, argv.slice(1));
   const option = (name: string): string | null => options.values.get(name) ?? null;
+  const { llmClient } = deps;
 
   const classifierSpec = option("--classifier") ?? "function";
   const personasKey = option("--personas") ?? "content_moderation";
@@ -472,6 +589,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const debateConcurrency = numberOption(options, "--debate-concurrency", 5, COUNT_RULE);
   const maxDebateCostUsd = optionalNumberOption(options, "--max-debate-cost", COST_RULE);
 
+  const buildJury = (classifier: Jury["classifier"], confidenceThreshold: number): Jury =>
+    new Jury({
+      classifier,
+      personas: applyPersonaModel(selectPersonas(personasKey), personaModel),
+      confidenceThreshold,
+      judge: selectJudge(judgeKey, judgeModel, llmClient),
+      debateConfig,
+      debateConcurrency,
+      maxDebateCostUsd,
+      llmClient,
+    });
+
   if (command === "classify") {
     const input = option("--input");
     const output = option("--output");
@@ -483,17 +612,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
     const rows = readJsonl(input);
     const texts = rows.map((row, idx) => String(row.text ?? `row-${idx}`));
-    const { classifier, isMockClassifier } = buildClassifier(classifierSpec, labels, rows, labelsFlag);
-
-    const jury = new Jury({
-      classifier,
-      personas: applyPersonaModel(selectPersonas(personasKey), personaModel),
-      confidenceThreshold: threshold,
-      judge: selectJudge(judgeKey, judgeModel),
-      debateConfig,
-      debateConcurrency,
-      maxDebateCostUsd,
-    });
+    const { classifier, isMockClassifier } = buildClassifier(classifierSpec, labels, rows, labelsFlag, llmClient);
+    const jury = buildJury(classifier, threshold);
 
     const results = await jury.classifyBatch(texts, isMockClassifier ? 1 : concurrency, true);
     let failures = 0;
@@ -518,52 +638,94 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
 
+  if (command === "eval") {
+    const input = option("--input");
+    if (!input) {
+      throw new CliUsageError("--input is required");
+    }
+    const output = option("--output");
+    const bandUpper = numberOption(options, "--band-upper", 0.95, THRESHOLD_RULE);
+    const maxEscalations = optionalNumberOption(options, "--max-escalations", LIMIT_RULE);
+    const thresholds = thresholdsOption(options, bandUpper);
+    const errorCost = numberOption(options, "--error-cost", 10, COST_RULE);
+    const escalationCost = optionalNumberOption(options, "--escalation-cost", COST_RULE);
+    const concurrency = numberOption(options, "--concurrency", 5, COUNT_RULE);
+
+    const { rows, texts, expectedLabels } = readLabelledInput(input);
+    const inferenceLabels = resolveCalibrationLabels(rawLabels, expectedLabels);
+    const { classifier } = buildClassifier(classifierSpec, inferenceLabels, rows, labelsFlag, llmClient);
+    const jury = buildJury(classifier, 0.7);
+
+    const report = await new JuryEvaluator(jury)
+      .evaluate({ texts, labels: expectedLabels, bandUpper, maxEscalations, concurrency })
+      .catch((err: unknown) => {
+        if (err instanceof TooManyEscalationsError) {
+          throw new CliUsageError(`Invalid value for '--max-escalations': ${err.message}`);
+        }
+        throw err;
+      });
+
+    const sweepOptions = { thresholds, errorCost, escalationCost };
+    const sweep = report.thresholdSweep(sweepOptions).map(sweepRowToDict);
+    const bestThreshold = report.bestThreshold(sweepOptions);
+    const dict = report.toDict();
+    process.stdout.write(`${JSON.stringify({ best_threshold: bestThreshold, summary: dict.summary, sweep })}\n`);
+    if (output) {
+      const full = {
+        best_threshold: bestThreshold,
+        band_upper: dict.band_upper,
+        summary: dict.summary,
+        sweep,
+        items: dict.items,
+      };
+      writeFileSync(output, `${JSON.stringify(full, null, 2)}\n`, "utf8");
+    }
+    return 0;
+  }
+
   // calibrate
   const input = option("--input");
   if (!input) {
     throw new CliUsageError("--input is required");
   }
+  const useJury = options.flags.has("--use-jury");
   const errorCost = numberOption(options, "--error-cost", 10, COST_RULE);
-  const escalationCost = numberOption(options, "--escalation-cost", 0.05, COST_RULE);
+  const escalationCost = optionalNumberOption(options, "--escalation-cost", COST_RULE);
   const initialThreshold = numberOption(options, "--initial-threshold", 0.7, THRESHOLD_RULE);
 
-  const rows = readJsonl(input);
-  if (rows.length === 0) {
-    throw new CliUsageError("Input JSONL is empty.");
-  }
-
-  const missingLabels = rows.filter((row) => row.label == null).length;
-  if (missingLabels > 0) {
-    throw new CliUsageError(
-      `Calibration input requires a ground-truth 'label' field on every row. Missing labels in ${missingLabels} row(s).`,
-    );
-  }
-
-  const texts = rows.map((row, idx) => String(row.text ?? `row-${idx}`));
-  const expectedLabels = rows.map((row) => String(row.label));
+  const { rows, texts, expectedLabels } = readLabelledInput(input);
   const inferenceLabels = resolveCalibrationLabels(rawLabels, expectedLabels);
-  const { classifier } = buildClassifier(classifierSpec, inferenceLabels, rows, labelsFlag);
+  const { classifier } = buildClassifier(classifierSpec, inferenceLabels, rows, labelsFlag, llmClient);
 
-  const jury = new Jury({
-    classifier,
-    personas: applyPersonaModel(selectPersonas(personasKey), personaModel),
-    confidenceThreshold: initialThreshold,
-    judge: selectJudge(judgeKey, judgeModel),
-    debateConfig,
-    debateConcurrency,
-    maxDebateCostUsd,
-  });
+  if (!useJury) {
+    const ignored = JURY_OPTIONS.filter((name) => options.values.has(name) || options.flags.has(name));
+    if (ignored.length > 0) {
+      process.stderr.write(
+        `Note: calibrate without --use-jury never runs the jury, so ${ignored.join(", ")} had no effect. ` +
+          "Pass --use-jury to measure the jury's outcomes.\n",
+      );
+    }
+  }
 
+  const jury = buildJury(classifier, initialThreshold);
   const calibrator = new ThresholdCalibrator(jury);
   const bestThreshold = await calibrator.calibrate({
     texts,
     labels: expectedLabels,
     errorCost,
     escalationCost,
+    useJury,
   });
   const report = calibrator.calibrationReport();
-  report.bestThreshold = bestThreshold;
-  process.stdout.write(`${JSON.stringify(toSnakeCaseObject(report))}\n`);
+  const out: Record<string, unknown> = {
+    best_threshold: bestThreshold,
+    use_jury: report.useJury,
+    rows: toSnakeCaseObject(report.rows),
+  };
+  if (calibrator.evaluationReport) {
+    out.summary = calibrator.evaluationReport.toDict().summary;
+  }
+  process.stdout.write(`${JSON.stringify(out)}\n`);
   return 0;
 }
 
