@@ -11,6 +11,12 @@ marked **[py]** or **[ts]**.
 
 ## [Unreleased]
 
+### Fixed
+- **[ts]** `npm publish` no longer auto-corrects `package.json`: the bin path
+  is written as npm normalizes it, and the release job builds before
+  publishing. npm's "script name ... was invalid and removed" warning in
+  earlier publish logs was a path normalization; the bin was always kept.
+
 ## [0.3.0] - 2026-09-24
 
 ### Added

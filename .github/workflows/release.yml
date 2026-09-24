@@ -248,11 +248,15 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install and publish
+      # Build before publishing. npm checks bin targets when it reads the
+      # manifest, before prepack runs, and warns that it drops a bin whose
+      # file does not exist yet.
+      - name: Install, build and publish
         working-directory: packages/typescript
         run: |
           npm install -g npm@latest
           npm install
+          npm run build
           npm publish --access public --provenance
 
   github-release:

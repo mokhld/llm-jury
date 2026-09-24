@@ -25,7 +25,7 @@ function runThroughSymlink(target: string, args: string[]) {
 
 test("package bin points at the dedicated bin entry", () => {
   const pkg = JSON.parse(readFileSync(join(PACKAGE_DIR, "package.json"), "utf8")) as { bin: Record<string, string> };
-  assert.equal(pkg.bin["llm-jury"], "./dist/cli/bin.js");
+  assert.equal(pkg.bin["llm-jury"], "dist/cli/bin.js");
 });
 
 for (const target of ["bin.ts", "main.ts"]) {
