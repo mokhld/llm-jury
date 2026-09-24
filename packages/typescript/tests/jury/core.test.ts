@@ -132,16 +132,43 @@ test("debateConcurrency is configurable", () => {
   assert.equal((jury.debateEngine as unknown as { concurrency: number }).concurrency, 2);
 });
 
-test("estimatedMaxDebateCostUsd matches N x rounds x per-persona", () => {
+test("estimatedMaxDebateCostUsd counts persona rounds, summariser and LLM judge calls", () => {
   const classifier = new FunctionClassifier(() => ["safe", 0.95], ["safe", "unsafe"]);
   const personas = Array.from({ length: 3 }, (_, i) => persona(`P${i}`));
   const jury = new Jury({
     classifier,
     personas,
+    llmClient: new FakeLLMClient(),
     debateConfig: new DebateConfig({ maxRounds: 2 }),
     estimatedCostPerPersonaUsd: 0.02,
   });
-  assert.equal(jury.estimatedMaxDebateCostUsd, 0.12);
+  // DELIBERATION with the default LLMJudge: 3 personas x 2 rounds + 1
+  // summariser + 1 judge = 8 calls.
+  assert.ok(Math.abs(jury.estimatedMaxDebateCostUsd - 8 * 0.02) < 1e-12);
+});
+
+test("estimatedMaxDebateCostUsd: single-round modes and non-LLM judges", () => {
+  const classifier = new FunctionClassifier(() => ["safe", 0.95], ["safe", "unsafe"]);
+  const personas = Array.from({ length: 3 }, (_, i) => persona(`P${i}`));
+  const independentLlmJudge = new Jury({
+    classifier,
+    personas,
+    llmClient: new FakeLLMClient(),
+    debateConfig: new DebateConfig({ mode: DebateMode.INDEPENDENT, maxRounds: 4 }),
+    estimatedCostPerPersonaUsd: 0.5,
+  });
+  // 3 persona calls (maxRounds ignored outside DELIBERATION) + 1 judge.
+  assert.equal(independentLlmJudge.estimatedMaxDebateCostUsd, 2);
+
+  const deliberationVote = new Jury({
+    classifier,
+    personas,
+    judge: new MajorityVoteJudge(),
+    debateConfig: new DebateConfig({ maxRounds: 3 }),
+    estimatedCostPerPersonaUsd: 0.5,
+  });
+  // 3 x 3 persona calls + 1 summariser, no judge call.
+  assert.equal(deliberationVote.estimatedMaxDebateCostUsd, 5);
 });
 
 test("pre-flight estimate skips debate when over cap", async () => {
@@ -157,7 +184,7 @@ test("pre-flight estimate skips debate when over cap", async () => {
     debateConfig: new DebateConfig({ maxRounds: 2 }),
   });
 
-  // 4 × 2 × 0.01 = 0.08 > 0.05 → pre-flight refusal
+  // (4 × 2 + summariser + judge) × 0.01 = 0.10 > 0.05 → pre-flight refusal
   const verdict = await jury.classify("text");
   assert.equal(verdict.judgeStrategy, "cost_guard_pre_flight");
   assert.equal(verdict.label, "safe");
@@ -267,7 +294,7 @@ test("F4: onCostEstimate fires before maxDebateCostUsd guard", async () => {
     personas,
     llmClient: llm,
     maxDebateCostUsd: 0.05,
-    estimatedCostPerPersonaUsd: 0.01, // 4 × 2 × 0.01 = 0.08 > 0.05
+    estimatedCostPerPersonaUsd: 0.01, // (4 × 2 + 2) × 0.01 = 0.10 > 0.05
     onCostEstimate: () => false,
   });
 

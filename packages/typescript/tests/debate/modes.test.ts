@@ -29,7 +29,7 @@ test("sequential mode one round", async () => {
   assert.equal(transcript.rounds.length, 1);
 });
 
-test("deliberation mode early consensus", async () => {
+test("deliberation mode stops after a unanimous opening round", async () => {
   const llm = new FakeLLMClient({
     A: { content: JSON.stringify({ label: "safe", confidence: 0.9, reasoning: "a", key_factors: ["x"] }) },
     B: { content: JSON.stringify({ label: "safe", confidence: 0.8, reasoning: "b", key_factors: ["y"] }) },
@@ -37,7 +37,11 @@ test("deliberation mode early consensus", async () => {
   });
   const engine = new DebateEngine(personas, new DebateConfig({ mode: DebateMode.DELIBERATION, maxRounds: 3 }), llm);
   const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
-  assert.equal(transcript.rounds.length, 2);
+  // Consensus is checked after the opening round too: no deliberation
+  // rounds and no summariser call, so only the 3 opening persona calls.
+  assert.equal(transcript.rounds.length, 1);
+  assert.equal(transcript.summary, undefined);
+  assert.equal(llm.calls.length, 3);
 });
 
 test("F7: early stops on high confidence even with split labels", async () => {
@@ -52,9 +56,41 @@ test("F7: early stops on high confidence even with split labels", async () => {
     llm,
   );
   const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
-  // Round 0 (initial opinions) always runs; F7 short-circuits at the
-  // consensus check after round 1 — so 2 rounds, not 5.
+  // The earlyStopMinConfidence rule is met by the opening round, so the
+  // debate stops there: 1 round, not 5, and no summary.
+  assert.equal(transcript.rounds.length, 1);
+  assert.equal(transcript.summary, undefined);
+});
+
+// Opening round splits, first deliberation round is unanimous: the loop
+// stops at that round and the summariser still runs.
+class ConvergingClient {
+  personaCalls = 0;
+  summariserCalls = 0;
+  async complete(_model: string, systemPrompt: string, prompt: string, _temperature = 0) {
+    if (systemPrompt.startsWith("You are a neutral summarisation agent")) {
+      this.summariserCalls += 1;
+      return { content: "summary", tokens: 1, costUsd: 0.001 };
+    }
+    this.personaCalls += 1;
+    const deliberating = prompt.includes("## Deliberation Instructions");
+    const label = deliberating || systemPrompt === "A" ? "safe" : "unsafe";
+    return {
+      content: JSON.stringify({ label, confidence: 0.8, reasoning: "r", key_factors: [] }),
+      tokens: 1,
+      costUsd: 0.001,
+    };
+  }
+}
+
+test("deliberation consensus in a later round stops the loop and still summarises", async () => {
+  const llm = new ConvergingClient();
+  const engine = new DebateEngine(personas, new DebateConfig({ mode: DebateMode.DELIBERATION, maxRounds: 4 }), llm);
+  const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
   assert.equal(transcript.rounds.length, 2);
+  assert.equal(llm.personaCalls, 6);
+  assert.equal(llm.summariserCalls, 1);
+  assert.equal(transcript.summary, "summary");
 });
 
 test("F7: does not early stop when one persona is below threshold", async () => {
@@ -151,11 +187,10 @@ test("one persona failure does not crash deliberation mode", async () => {
   assert.match(failed.reasoning, /Persona call failed/);
 });
 
-// T9: single-persona deliberation — a one-persona round trivially has one
-// unique label, so consensus is reached immediately. Pins that the engine
-// runs maxRounds rounds without dividing-by-zero or otherwise mishandling
-// the size-1 persona set, and still produces a summary.
-test("single-persona deliberation reaches consensus and summarises", async () => {
+// T9: single-persona deliberation. A one-persona round trivially has one
+// unique label, so consensus is reached in the opening round and the
+// debate stops there without deliberation rounds or a summary.
+test("single-persona deliberation reaches consensus in the opening round", async () => {
   const singlePersona: Persona[] = [
     { name: "SOLO_PERSONA_TOKEN", role: "role", systemPrompt: "SOLO_PERSONA_TOKEN", model: "gpt-5-mini", temperature: 0.3 },
   ];
@@ -172,13 +207,12 @@ test("single-persona deliberation reaches consensus and summarises", async () =>
 
   const transcript = await engine.debate("text", primary, ["safe", "unsafe"]);
 
-  assert.equal(transcript.rounds.length, 2);
-  for (const round of transcript.rounds) {
-    assert.equal(round.length, 1);
-    assert.equal(round[0]!.label, "safe");
-  }
-  assert.ok(transcript.summary, "summary should be produced after consensus");
-  assert.equal(engine.consensusReached(transcript.rounds[1]!), true);
+  assert.equal(transcript.rounds.length, 1);
+  assert.equal(transcript.rounds[0]!.length, 1);
+  assert.equal(transcript.rounds[0]![0]!.label, "safe");
+  assert.equal(transcript.summary, undefined, "consensus in the opening round skips the summariser");
+  assert.equal(llm.calls.length, 1);
+  assert.equal(engine.consensusReached(transcript.rounds[0]!), true);
 });
 
 // T9: no-response rounds — consensusReached([]) is defended at engine.ts:502
@@ -200,8 +234,10 @@ class SummariserFailureClient {
       throw new Error("summariser is unavailable");
     }
     this.personaCalls += 1;
+    // Split labels so there is no consensus and the summariser runs.
+    const label = systemPrompt === "A" ? "safe" : "unsafe";
     return {
-      content: JSON.stringify({ label: "safe", confidence: 0.8, reasoning: "ok", key_factors: ["k"] }),
+      content: JSON.stringify({ label, confidence: 0.8, reasoning: "ok", key_factors: ["k"] }),
       tokens: 10,
       costUsd: 0.001,
     };

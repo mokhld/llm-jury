@@ -8,13 +8,16 @@ export interface LLMClient {
     prompt: string,
     temperature?: number,
     responseFormat?: Record<string, unknown>,
-  ): Promise<{ content: string; tokens?: number; costUsd?: number }>;
+  ): Promise<{ content: string; tokens?: number; costUsd?: number; cached?: boolean }>;
 }
 
 export type LiteLLMClientOptions = {
   baseUrl?: string;
   apiKey?: string;
   timeoutMs?: number;
+  // Total attempts per call, including the first (default 3, minimum 1).
+  // Only 429, 5xx, network errors and timeouts are retried.
+  maxAttempts?: number;
   logger?: Logger;
 };
 
@@ -34,12 +37,52 @@ export function isRetryableError(err: unknown): boolean {
   if (err instanceof TypeError) return true;
   if (err instanceof Error && err.name === "AbortError") return true;
   const status = readErrorStatus(err);
-  if (typeof status === "number" && (status === 429 || (status >= 500 && status < 600))) {
-    return true;
+  if (typeof status === "number") {
+    return status === 429 || (status >= 500 && status < 600);
   }
-  // Back-compat: errors thrown without a structured status but mentioning one in the message.
+  // Back-compat: errors thrown without a structured status but mentioning
+  // one in the message. Only consulted when there is no structured status,
+  // so a 400 whose body happens to contain "512" is not retried.
   if (err instanceof Error && /\b(?:429|5\d{2})\b/.test(err.message)) return true;
   return false;
+}
+
+const MAX_RETRY_AFTER_MS = 60_000;
+
+function readHeader(headers: unknown, name: string): string | undefined {
+  if (!headers || typeof headers !== "object") return undefined;
+  const getter = (headers as { get?: unknown }).get;
+  if (typeof getter === "function") {
+    const value: unknown = getter.call(headers, name);
+    return value == null ? undefined : String(value);
+  }
+  for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (key.toLowerCase() === name && value != null) return String(value);
+  }
+  return undefined;
+}
+
+/**
+ * Delay requested by a `Retry-After` header on the error (`err.headers` or
+ * `err.response.headers`), in ms and capped at 60 s. Accepts delta-seconds
+ * or an HTTP-date. Undefined when the header is absent or unparseable.
+ */
+function retryAfterMs(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as Record<string, unknown>;
+  const response = e.response as Record<string, unknown> | undefined;
+  const raw = readHeader(e.headers, "retry-after") ?? readHeader(response?.headers, "retry-after");
+  if (raw === undefined) return undefined;
+  const value = raw.trim();
+  let delayMs: number;
+  if (/^\d+(?:\.\d+)?$/.test(value)) {
+    delayMs = Number(value) * 1000;
+  } else {
+    const at = Date.parse(value);
+    if (Number.isNaN(at)) return undefined;
+    delayMs = Math.max(0, at - Date.now());
+  }
+  return Math.min(MAX_RETRY_AFTER_MS, delayMs);
 }
 
 async function withRetry<T>(
@@ -57,7 +100,7 @@ async function withRetry<T>(
       if (!isRetryableError(err) || attempt === maxAttempts) {
         throw err;
       }
-      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      const delay = retryAfterMs(err) ?? baseDelayMs * Math.pow(2, attempt - 1);
       logger.warn(`[llm-jury] LLM call failed (attempt ${attempt}/${maxAttempts}); retrying`, {
         delayMs: delay,
         error: err instanceof Error ? err.message : String(err),
@@ -72,12 +115,14 @@ export class LiteLLMClient implements LLMClient {
   private baseUrl: string;
   private apiKey: string | null;
   private timeoutMs: number;
+  private maxAttempts: number;
   private logger: Logger;
 
   constructor(options: LiteLLMClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.LITELLM_BASE_URL ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
     this.apiKey = options.apiKey ?? process.env.LITELLM_API_KEY ?? process.env.OPENAI_API_KEY ?? null;
     this.timeoutMs = options.timeoutMs ?? 60000;
+    this.maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 3) || 1);
     this.logger = options.logger ?? NOOP_LOGGER;
   }
 
@@ -133,8 +178,10 @@ export class LiteLLMClient implements LLMClient {
           const detail = await response.text();
           const httpError = new Error(`LLM request failed (${response.status}): ${detail}`) as Error & {
             status: number;
+            headers: Headers;
           };
           httpError.status = response.status;
+          httpError.headers = response.headers;
           throw httpError;
         }
 
@@ -156,7 +203,7 @@ export class LiteLLMClient implements LLMClient {
       } finally {
         clearTimeout(timeout);
       }
-    }, 3, 1000, this.logger);
+    }, this.maxAttempts, 1000, this.logger);
   }
 }
 
@@ -164,7 +211,11 @@ function shouldSendTemperature(model: string, temperature: number | undefined): 
   if (typeof temperature !== "number" || Number.isNaN(temperature)) {
     return false;
   }
+  // Reasoning models reject a custom temperature. Match on the model name
+  // after any provider prefix, so "openai/gpt-5-mini" is treated like
+  // "gpt-5-mini".
   const lower = model.toLowerCase();
+  const name = lower.slice(lower.lastIndexOf("/") + 1);
   const noTempPrefixes = ["o1", "o3", "gpt-5"];
-  return !noTempPrefixes.some((prefix) => lower.startsWith(prefix));
+  return !noTempPrefixes.some((prefix) => name.startsWith(prefix));
 }

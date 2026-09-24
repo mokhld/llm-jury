@@ -3,11 +3,21 @@ import { LiteLLMClient } from "../llm/client.ts";
 import { validResponses } from "../debate/engine.ts";
 import type { DebateTranscript } from "../debate/engine.ts";
 import { DEFAULT_MODEL } from "../defaults.ts";
+import { buildJudgeResponseSchema } from "../personas/schema.ts";
 import { Verdict, fallbackVerdict } from "./base.ts";
 import type { JudgeStrategy } from "./base.ts";
+import { MajorityVoteJudge } from "./majorityVote.ts";
 import { NOOP_LOGGER } from "../logger.ts";
 import type { Logger } from "../logger.ts";
-import { stripMarkdown, safeJsonObject } from "../utils.ts";
+import {
+  addCosts,
+  formatConfidence,
+  matchLabel,
+  parseConfidence,
+  safeJsonObject,
+  stripMarkdown,
+  wrapUntrusted,
+} from "../utils.ts";
 
 export type LLMJudgeOptions = {
   model?: string;
@@ -24,8 +34,11 @@ export type LLMJudgeOptions = {
  * tracking actually failed.
  */
 export function sumCosts(a: number | null | undefined, b: number | null | undefined): number | null {
-  if ((a == null) && (b == null)) return null;
-  return Number(a ?? 0) + Number(b ?? 0);
+  return addCosts(a, b);
+}
+
+function toStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 export class LLMJudge implements JudgeStrategy {
@@ -59,8 +72,8 @@ export class LLMJudge implements JudgeStrategy {
     this.model = options.model ?? DEFAULT_MODEL;
     this.systemPrompt = options.systemPrompt ?? LLMJudge.DEFAULT_SYSTEM_PROMPT;
     this.temperature = options.temperature ?? 0;
-    this.llmClient = options.llmClient ?? new LiteLLMClient();
     this.logger = options.logger ?? NOOP_LOGGER;
+    this.llmClient = options.llmClient ?? new LiteLLMClient({ logger: this.logger });
   }
 
   async judge(transcript: DebateTranscript, labels: string[]): Promise<Verdict> {
@@ -76,29 +89,82 @@ export class LLMJudge implements JudgeStrategy {
     }
 
     const prompt = this.buildPrompt(transcript, labels);
-    const payload = await this.llmClient.complete(this.model, this.systemPrompt, prompt, this.temperature);
-    const totalCostUsd = sumCosts(transcript.totalCostUsd, payload.costUsd);
+    const responseFormat = buildJudgeResponseSchema(labels) as unknown as Record<string, unknown>;
+
+    // The debate is already paid for, so a judge outage (5xx after retries,
+    // timeout, auth error) degrades to a vote instead of rejecting classify().
+    let payload: Awaited<ReturnType<LLMClient["complete"]>>;
+    try {
+      payload = await this.llmClient.complete(
+        this.model,
+        this.systemPrompt,
+        prompt,
+        this.temperature,
+        responseFormat,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      this.logger.warn("[llm-jury] LLMJudge call failed; falling back to a majority vote of the final round", {
+        error: message,
+      });
+      return this.voteFallback(
+        transcript,
+        labels,
+        "llm_judge_fallback_error",
+        `LLM judge call failed (${message}).`,
+        transcript.totalCostUsd,
+      );
+    }
+
+    const totalCostUsd = addCosts(transcript.totalCostUsd, payload.costUsd);
     const parsed = safeJsonObject(stripMarkdown(payload.content));
     if (!parsed) {
-      this.logger.warn("[llm-jury] LLMJudge response was not valid JSON; falling back to primary result", {
-        rawContent: payload.content.slice(0, 500),
-      });
-      return new Verdict({
-        label: String(transcript.primaryResult.label),
-        confidence: Number(transcript.primaryResult.confidence),
-        reasoning: "LLM judge response was not valid JSON. Falling back to primary result.",
-        wasEscalated: true,
-        primaryResult: transcript.primaryResult,
-        debateTranscript: transcript,
-        judgeStrategy: "llm_judge_fallback_invalid_json",
-        totalDurationMs: transcript.durationMs,
+      this.logger.warn(
+        "[llm-jury] LLMJudge response was not valid JSON; falling back to a majority vote of the final round",
+        { rawContent: payload.content.slice(0, 500) },
+      );
+      return this.voteFallback(
+        transcript,
+        labels,
+        "llm_judge_fallback_invalid_json",
+        "LLM judge response was not valid JSON.",
         totalCostUsd,
-      });
+      );
+    }
+
+    const label = matchLabel(parsed.label, labels);
+    if (label === null) {
+      this.logger.warn(
+        "[llm-jury] LLMJudge returned a label outside the configured labels; falling back to a majority vote of the final round",
+        { label: parsed.label, labels },
+      );
+      return this.voteFallback(
+        transcript,
+        labels,
+        "llm_judge_fallback_invalid_label",
+        `LLM judge returned label '${String(parsed.label)}', which is not one of the configured labels.`,
+        totalCostUsd,
+      );
+    }
+
+    const confidence = parseConfidence(parsed.confidence);
+    if (confidence === null) {
+      this.logger.warn(
+        "[llm-jury] LLMJudge returned an invalid confidence; falling back to a majority vote of the final round",
+        { confidence: parsed.confidence },
+      );
+      return this.voteFallback(
+        transcript,
+        labels,
+        "llm_judge_fallback_invalid_confidence",
+        `LLM judge returned confidence '${String(parsed.confidence)}', which is not a finite number.`,
+        totalCostUsd,
+      );
     }
 
     return new Verdict({
-      label: String(parsed.label ?? transcript.primaryResult.label),
-      confidence: Number(parsed.confidence ?? transcript.primaryResult.confidence),
+      label,
+      confidence,
       reasoning: String(parsed.reasoning ?? "LLM judge response."),
       wasEscalated: true,
       primaryResult: transcript.primaryResult,
@@ -106,16 +172,61 @@ export class LLMJudge implements JudgeStrategy {
       judgeStrategy: "llm_judge",
       totalDurationMs: transcript.durationMs,
       totalCostUsd,
+      judgeDetails: {
+        keyAgreements: toStringList(parsed.key_agreements),
+        keyDisagreements: toStringList(parsed.key_disagreements),
+        decisiveFactor: parsed.decisive_factor == null ? null : String(parsed.decisive_factor),
+      },
     });
+  }
+
+  /**
+   * Verdict used when the judge's own output is unusable: a majority vote
+   * over the final round's valid responses (no further LLM call), or the
+   * primary classifier result when that round has no valid responses.
+   */
+  private async voteFallback(
+    transcript: DebateTranscript,
+    labels: string[],
+    judgeStrategy: string,
+    reason: string,
+    totalCostUsd: number | null,
+  ): Promise<Verdict> {
+    const lastRound = transcript.rounds[transcript.rounds.length - 1] ?? [];
+    if (validResponses(lastRound).length === 0) {
+      const verdict = fallbackVerdict(
+        transcript,
+        judgeStrategy,
+        `${reason} No valid persona responses in the final round; returning primary classifier result.`,
+      );
+      verdict.totalCostUsd = totalCostUsd;
+      return verdict;
+    }
+
+    const vote = await new MajorityVoteJudge().judge(transcript, labels);
+    vote.reasoning =
+      `${reason} Falling back to a majority vote over the final round's persona responses. ${vote.reasoning}`;
+    vote.judgeStrategy = judgeStrategy;
+    vote.totalCostUsd = totalCostUsd;
+    return vote;
   }
 
   buildPrompt(transcript: DebateTranscript, labels: string[]): string {
     const lines: string[] = [];
-    lines.push(`Input: ${transcript.inputText}`);
+    lines.push(`Input:\n${wrapUntrusted(transcript.inputText)}`);
     lines.push(`Available labels: ${labels.join(", ")}`);
     lines.push(
-      `Primary result: ${transcript.primaryResult.label} (${Number(transcript.primaryResult.confidence).toFixed(2)})`,
+      `Primary result: ${transcript.primaryResult.label} (${formatConfidence(transcript.primaryResult.confidence)})`,
     );
+
+    const biases = Object.entries(transcript.personaBiases ?? {});
+    if (biases.length > 0) {
+      lines.push("Expert roster:");
+      for (const [name, bias] of biases) {
+        lines.push(`- ${name} (known bias: ${bias})`);
+      }
+    }
+
     lines.push("Debate transcript:");
 
     transcript.rounds.forEach((round, index) => {
