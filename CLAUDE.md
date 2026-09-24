@@ -38,7 +38,8 @@ packages/typescript/src/             same layout, camelCase file names
   llm/client.ts        fetch-based OpenAI-compatible client, 60 s timeout, own retry
 packages/*/tests/                    mirror src; helpers.py / helpers.ts hold FakeLLMClient
 examples/                            *.py and typescript/*.ts (TS ones type-checked in CI)
-.github/workflows/                   ci.yml (lint, py 3.10-3.13, node 22), release.yml
+.github/workflows/                   ci.yml (lint, py 3.10-3.13, node 22/24, wheel and
+                                     npm tarball smoke tests), release.yml
 ```
 
 Gitignored, local only: `.content/` (articles, `value-analysis.md` on paper fidelity),
@@ -59,9 +60,10 @@ Python (from `packages/python`; venv already exists at `.venv`):
 .venv/bin/python -m pytest tests -q        # full suite, under 1 s
 .venv/bin/ruff check src tests
 .venv/bin/black --check src tests
-pip install -e ".[dev]"                     # fresh setup
+pip install -e ".[dev]"                     # fresh setup (or: uv sync --extra dev)
 ```
-TypeScript (from `packages/typescript`; deps hoisted to the root `node_modules`):
+TypeScript (from `packages/typescript`; deps hoisted to the root `node_modules`, fresh
+setup is `npm ci` at the repo root because the root lockfile covers the workspace):
 ```
 npm test          # node --test --experimental-strip-types, runs src directly
 npm run check     # tsc build to dist + type-check examples against dist
@@ -72,12 +74,20 @@ never add tests that need the network.
 
 In a git worktree: the venv's editable install points at the main checkout, so run Python
 with `PYTHONPATH=$PWD/src` and confirm `llm_jury.__file__` is in the worktree; symlink the
-root `node_modules` into the worktree instead of installing.
+root `node_modules` into the worktree instead of installing. That symlink is not covered by
+`.gitignore` (`node_modules/` only matches directories), so add paths explicitly, and
+through it `@llm-jury/core` (used by `check:examples`) resolves to the main checkout.
 
 Release: `gh workflow run release.yml -f version=X.Y.Z -f target=all|pypi|npm -f dry_run=false`.
-It bumps `pyproject.toml`, `_version.py`, `package.json`, `_version.ts`, commits to main,
-tags, tests, then publishes via OIDC trusted publishing. It commits and force-tags before
-tests run, even on dry runs (REL-01 in `docs/REVIEW.md`).
+The `prepare` job bumps `pyproject.toml`, `_version.py`, `package.json`, the workspace
+entry in `package-lock.json` and `_version.ts`, runs the Python and TS tests, lint and
+type-check on the bumped tree, then commits and tags locally and pushes both atomically.
+A dry run pushes nothing and publishes nothing. Tags are never moved: an existing `vX.Y.Z`
+on the release commit (a re-run) is reused, one elsewhere fails the run. Publishing is
+OIDC trusted publishing from the release commit (PyPI environment `pypi`; npm environment
+`npm`, whose job upgrades npm and must not set `registry-url` or `NODE_AUTH_TOKEN`).
+Registries refuse a version twice, so resume a partial release with `target` set to the
+registry that failed.
 
 Git: `main` has a required-review ruleset; self-authored PRs merge with
 `gh pr merge --admin --squash`. No Claude attribution in commits or PR text.
@@ -123,8 +133,12 @@ Git: `main` has a required-review ruleset; self-authored PRs merge with
 - CLI defaults (`independent`, 1 round) differ from SDK defaults (`deliberation`, 2 rounds).
 - TS `Jury` logs nothing unless given a logger (`logger: console`).
 - TS sources import with `.ts` extensions and run under `--experimental-strip-types`
-  (Node 22.6+). The npm `test` glob `tests/**/*.test.ts` is unquoted, so sh expands it one
-  directory level deep; keep test files at `tests/<area>/<name>.test.ts`.
+  (Node 22.6+). The npm `test` glob is quoted, so Node expands `tests/**/*.test.ts` at any
+  depth. The published package is compiled JS and declares `engines.node >=20`; the
+  `npm-package` CI job runs the packed tarball on Node 20 and 22.
+- `packages/python/LICENSE` and `packages/typescript/LICENSE` are copies of the root
+  `LICENSE` so the wheel, sdist and npm tarball ship it; change all three together.
+  Package READMEs are rendered on PyPI and npm, so their links must be absolute GitHub URLs.
 - `AUDIT.md`, cited by older docs, was never committed. `docs/REVIEW.md` explains the old
-  IDs (B8, R7, S1, F7 and so on) and replaces it.
+  IDs (B8, R7, S1, F7 and so on) and replaces it; the docs now link there.
 - Docs and comments: no em dashes, sentence-case headings, describe the code as it is.

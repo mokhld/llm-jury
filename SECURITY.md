@@ -2,16 +2,16 @@
 
 ## Supported versions
 
-`llm-jury` is pre-1.0. Only the latest minor release of each SDK
-receives security fixes:
+`llm-jury` is pre-1.0. Security fixes go to the latest `0.2.x` release
+and, once it ships, to `0.3.x`:
 
-| Package                  | Supported version |
-| ------------------------ | ----------------- |
-| `llm-jury-classifier` (Python) | latest `0.1.x`    |
-| `@llm-jury/core` (TypeScript)  | latest `0.1.x`    |
+| Package                        | Supported versions             |
+| ------------------------------ | ------------------------------ |
+| `llm-jury-classifier` (Python) | `0.3.x` (upcoming), `0.2.x`    |
+| `@llm-jury/core` (TypeScript)  | `0.3.x` (upcoming), `0.2.x`    |
 
-Older versions will not receive backports. Upgrade to the latest
-published version before reporting.
+`0.1.x` no longer receives fixes. Upgrade to the latest published
+version before reporting.
 
 ## Reporting a vulnerability
 
@@ -53,13 +53,17 @@ Out of scope:
 
 - Vulnerabilities in upstream dependencies (report those to the
   dependency's own project; we will pick up patched versions via
-  Dependabot once it is enabled — see audit item C2).
-- Prompt-injection in user-supplied text. This is a known class of
-  issue with LLM-based classification — see audit items S1 / F11.
-  Mitigation guidance is in the README; a built-in detector is on the
-  roadmap as F11.
-- Denial-of-wallet via large inputs. Tracked as audit item S4. Until
-  it lands, callers are expected to enforce their own input caps.
+  Dependabot once it is enabled, old audit item C2 in
+  [docs/REVIEW.md](docs/REVIEW.md)).
+- Prompt injection in user-supplied text. This is a known class of
+  issue with LLM-based classification. The SDK fences the input in
+  every prompt and validates returned labels; the README section
+  [Prompt injection and untrusted input](README.md#prompt-injection-and-untrusted-input)
+  describes what it does and what callers should still do. A bypass
+  of the fencing or of label validation is in scope. There is no
+  built-in injection detector (old audit item F11).
+- Denial-of-wallet via large inputs. The SDK has no input length cap
+  (old audit item S4), so callers are expected to enforce their own.
 - Issues that require a malicious model provider or a compromised
   API key.
 
@@ -67,8 +71,13 @@ Out of scope:
 
 Even on a supported version you should:
 
-- Set `max_debate_cost_usd` to bound spend.
+- Set `max_debate_cost_usd` to bound spend, and set
+  `estimated_cost_per_persona_usd` to a realistic per-call cost for your
+  models, since calls that report no cost are charged at that estimate.
 - Cap untrusted input length before passing it to a `Jury`.
+- Route degraded and fallback verdicts (`debate_degraded`, or a
+  `judge_strategy` of `cost_guard_*` or `llm_judge_fallback_*`) to human
+  review.
 - Treat persona prompts as untrusted output — don't `eval` or shell
   out to anything derived from a verdict.
 - Rotate API keys regularly and scope them per-environment.

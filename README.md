@@ -4,15 +4,17 @@
 
 [![CI](https://github.com/mokhld/llm-jury/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mokhld/llm-jury/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Node.js 22.6+](https://img.shields.io/badge/node.js-22.6%2B-green.svg)](https://nodejs.org/)
+[![Node.js 20+](https://img.shields.io/badge/node.js-20%2B-green.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ## Overview
 
 `llm-jury` is an SDK, not a hosted API. Your app imports it directly:
 
-- Python package: `llm-jury` (import path: `llm_jury`)
+- Python package: `llm-jury-classifier` (import path: `llm_jury`)
 - TypeScript package: `@llm-jury/core`
+
+Do not `pip install llm-jury`: that name on PyPI is an unrelated project that also installs an `llm_jury` module.
 
 It wraps a classifier returning `(label, confidence)` and adds confidence-based escalation:
 
@@ -55,7 +57,7 @@ npm install @llm-jury/core
 ## Prerequisites
 
 - Python `>=3.10`
-- Node.js `>=22.6`
+- Node.js `>=20` for the published package; `>=22.6` to run the TypeScript examples or the repo's tests, which load `.ts` files with `--experimental-strip-types`
 - For real LLM calls: `OPENAI_API_KEY` (or provider key through your LiteLLM/OpenAI setup)
 
 ## Quick Start
@@ -169,7 +171,7 @@ TS examples import from `@llm-jury/core`; to run from a fresh clone, install the
 
 ## SDK Response
 
-`jury.classify(text)` returns a `Verdict`. There are two shapes depending on whether the input was escalated.
+`jury.classify(text)` returns a `Verdict`. There are two shapes depending on whether the input was escalated. The JSON below is what `to_dict()` / `toDict()` return. The samples are illustrative and shortened (persona `raw_response` is left out). The durations and costs are made up; real escalations take far longer and cost more (see [Important Notes](#important-notes) for measured numbers).
 
 ### Fast path (confidence above threshold)
 
@@ -186,12 +188,18 @@ When the primary classifier is confident enough, the verdict is returned directl
   "primary_result": {
     "label": "safe",
     "confidence": 0.95,
-    "raw_output": { "label": "safe", "confidence": 0.95 }
+    "raw_output": { "label": "safe", "confidence": 0.95 },
+    "cost_usd": 0.0001
   },
   "debate_transcript": null,
   "judge_strategy": "primary_classifier",
   "total_duration_ms": 312,
-  "total_cost_usd": 0.0001
+  "total_cost_usd": 0.0001,
+  "persona_failures": 0,
+  "library_version": "0.2.0",
+  "created_at": "2026-09-24T10:15:00.123456+00:00",
+  "judge_details": null,
+  "debate_degraded": false
 }
 ```
 
@@ -206,18 +214,24 @@ When the primary classifier is confident enough, the verdict is returned directl
   "primaryResult": {
     "label": "safe",
     "confidence": 0.95,
-    "rawOutput": { "label": "safe", "confidence": 0.95 }
+    "rawOutput": { "label": "safe", "confidence": 0.95 },
+    "costUsd": 0.0001
   },
   "debateTranscript": null,
   "judgeStrategy": "primary_classifier",
   "totalDurationMs": 312,
-  "totalCostUsd": 0.0001
+  "totalCostUsd": 0.0001,
+  "personaFailures": 0,
+  "debateDegraded": false,
+  "judgeDetails": null,
+  "libraryVersion": "0.2.0",
+  "createdAt": "2026-09-24T10:15:00.123Z"
 }
 ```
 
 ### Escalated (confidence below threshold)
 
-When confidence is too low, the input goes through persona debate and a judge produces the final verdict.
+When confidence is too low, the input goes through persona debate and a judge produces the final verdict. In this sample the three personas agree in the opening round, so the debate stops there with no second round and no summary.
 
 **Python:**
 
@@ -230,7 +244,8 @@ When confidence is too low, the input goes through persona debate and a judge pr
   "primary_result": {
     "label": "unsafe",
     "confidence": 0.62,
-    "raw_output": { "label": "unsafe", "confidence": 0.62 }
+    "raw_output": { "label": "unsafe", "confidence": 0.62 },
+    "cost_usd": 0.0001
   },
   "debate_transcript": {
     "input_text": "Those people always cause problems wherever they go",
@@ -245,7 +260,8 @@ When confidence is too low, the input goes through persona debate and a judge pr
           "key_factors": ["group-targeting language", "sweeping generalization"],
           "dissent_notes": null,
           "tokens_used": 185,
-          "cost_usd": 0.0003
+          "cost_usd": 0.0003,
+          "failed": false
         },
         {
           "persona_name": "Cultural Context Expert",
@@ -255,7 +271,8 @@ When confidence is too low, the input goes through persona debate and a judge pr
           "key_factors": ["no mitigating context", "derogatory framing"],
           "dissent_notes": null,
           "tokens_used": 192,
-          "cost_usd": 0.0003
+          "cost_usd": 0.0003,
+          "failed": false
         },
         {
           "persona_name": "Harm Assessment Specialist",
@@ -265,18 +282,30 @@ When confidence is too low, the input goes through persona debate and a judge pr
           "key_factors": ["potential for real-world harm", "targets unspecified group"],
           "dissent_notes": null,
           "tokens_used": 178,
-          "cost_usd": 0.0003
+          "cost_usd": 0.0003,
+          "failed": false
         }
       ]
     ],
-    "summary": "The experts unanimously agreed the statement constitutes an unsafe sweeping generalization targeting a group.",
     "duration_ms": 2450,
     "total_tokens": 555,
-    "total_cost_usd": 0.0009
+    "total_cost_usd": 0.0009,
+    "summary": null,
+    "unpriced_calls": 0,
+    "persona_biases": {
+      "Policy Analyst": "policy-strict",
+      "Cultural Context Expert": "tends permissive on context",
+      "Harm Assessment Specialist": "harm-focused"
+    }
   },
   "judge_strategy": "majority_vote",
   "total_duration_ms": 2780,
-  "total_cost_usd": 0.001
+  "total_cost_usd": 0.001,
+  "persona_failures": 0,
+  "library_version": "0.2.0",
+  "created_at": "2026-09-24T10:15:03.456789+00:00",
+  "judge_details": null,
+  "debate_degraded": false
 }
 ```
 
@@ -291,7 +320,8 @@ When confidence is too low, the input goes through persona debate and a judge pr
   "primaryResult": {
     "label": "unsafe",
     "confidence": 0.62,
-    "rawOutput": { "label": "unsafe", "confidence": 0.62 }
+    "rawOutput": { "label": "unsafe", "confidence": 0.62 },
+    "costUsd": 0.0001
   },
   "debateTranscript": {
     "inputText": "Those people always cause problems wherever they go",
@@ -304,9 +334,9 @@ When confidence is too low, the input goes through persona debate and a judge pr
           "confidence": 0.90,
           "reasoning": "The statement is a blanket negative generalization targeting a group.",
           "keyFactors": ["group-targeting language", "sweeping generalization"],
-          "dissentNotes": null,
           "tokensUsed": 185,
-          "costUsd": 0.0003
+          "costUsd": 0.0003,
+          "failed": false
         },
         {
           "personaName": "Cultural Context Expert",
@@ -314,9 +344,9 @@ When confidence is too low, the input goes through persona debate and a judge pr
           "confidence": 0.85,
           "reasoning": "While context could soften interpretation, the phrasing is unambiguously negative.",
           "keyFactors": ["no mitigating context", "derogatory framing"],
-          "dissentNotes": null,
           "tokensUsed": 192,
-          "costUsd": 0.0003
+          "costUsd": 0.0003,
+          "failed": false
         },
         {
           "personaName": "Harm Assessment Specialist",
@@ -324,38 +354,67 @@ When confidence is too low, the input goes through persona debate and a judge pr
           "confidence": 0.92,
           "reasoning": "Broad negative generalization risks normalizing prejudice against the targeted group.",
           "keyFactors": ["potential for real-world harm", "targets unspecified group"],
-          "dissentNotes": null,
           "tokensUsed": 178,
-          "costUsd": 0.0003
+          "costUsd": 0.0003,
+          "failed": false
         }
       ]
     ],
-    "summary": "The experts unanimously agreed the statement constitutes an unsafe sweeping generalization targeting a group.",
     "durationMs": 2450,
     "totalTokens": 555,
-    "totalCostUsd": 0.0009
+    "totalCostUsd": 0.0009,
+    "unpricedCalls": 0,
+    "personaBiases": {
+      "Policy Analyst": "policy-strict",
+      "Cultural Context Expert": "tends permissive on context",
+      "Harm Assessment Specialist": "harm-focused"
+    }
   },
   "judgeStrategy": "majority_vote",
   "totalDurationMs": 2780,
-  "totalCostUsd": 0.001
+  "totalCostUsd": 0.001,
+  "personaFailures": 0,
+  "debateDegraded": false,
+  "judgeDetails": null,
+  "libraryVersion": "0.2.0",
+  "createdAt": "2026-09-24T10:15:03.456Z"
 }
 ```
+
+With the default TypeScript `LiteLLMClient`, LLM calls report no cost: persona `costUsd` is absent, `unpricedCalls` counts every call and `totalCostUsd` is `null` (see [Important Notes](#important-notes)).
 
 ### Verdict field reference
 
 | Python | TypeScript | Type | Description |
 |---|---|---|---|
 | `label` | `label` | `str` / `string` | Final classification |
-| `confidence` | `confidence` | `float` / `number` | Final confidence (0.0–1.0) |
+| `confidence` | `confidence` | `float` / `number` | Final confidence (0.0 to 1.0) |
 | `reasoning` | `reasoning` | `str` / `string` | Human-readable explanation |
 | `was_escalated` | `wasEscalated` | `bool` / `boolean` | Whether debate was triggered |
 | `primary_result` | `primaryResult` | `ClassificationResult` | Fast-path classifier output |
-| `debate_transcript` | `debateTranscript` | `DebateTranscript \| None` | Full debate audit trail incl. `rounds`, `summary`, token/cost totals (null if not escalated) |
-| `judge_strategy` | `judgeStrategy` | `str` / `string` | Strategy that produced the verdict |
+| `debate_transcript` | `debateTranscript` | `DebateTranscript \| None` | Full debate audit trail (see below); null if no debate ran |
+| `judge_strategy` | `judgeStrategy` | `str` / `string` | Strategy that produced the verdict, including the fallback markers listed under [Troubleshooting](#troubleshooting) |
 | `total_duration_ms` | `totalDurationMs` | `int` / `number` | Wall-clock time (ms) |
-| `total_cost_usd` | `totalCostUsd` | `float \| None` / `number \| null` | API cost in USD |
-| `persona_failures` | `personaFailures` | `int` / `number` | Persona calls across the debate that failed (LLM error or unparseable output) |
-| `debate_degraded` | `debateDegraded` | `bool` / `boolean` | True when `persona_failures > 0` — the verdict was decided by fewer jurors than configured. Useful for routing to human review |
+| `total_cost_usd` | `totalCostUsd` | `float \| None` / `number \| null` | Primary classifier plus debate and judge cost in USD. `None` / `null` when any part is unknown; a lower bound when `debate_transcript.unpriced_calls > 0` |
+| `persona_failures` | `personaFailures` | `int` / `number` | Persona calls across the debate that failed (LLM error, unparseable output, or a label outside the configured set) |
+| `debate_degraded` | `debateDegraded` | `bool` / `boolean` | True when `persona_failures > 0`: the verdict was decided by fewer jurors than configured. Useful for routing to human review |
+| `judge_details` | `judgeDetails` | `dict \| None` / `Record<string, unknown> \| null` | `LLMJudge` only: `key_agreements`, `key_disagreements`, `decisive_factor` (TS keys are camelCase). Null for other judges and fallbacks |
+| `library_version` | `libraryVersion` | `str` / `string` | SDK version that produced the verdict |
+| `created_at` | `createdAt` | `str` / `string` | ISO 8601 UTC timestamp |
+
+### Debate transcript fields
+
+| Python | TypeScript | Type | Description |
+|---|---|---|---|
+| `input_text` | `inputText` | `str` / `string` | The text that was classified |
+| `primary_result` | `primaryResult` | `ClassificationResult` | Primary classifier output |
+| `rounds` | `rounds` | list of persona response lists | One list per round, in order |
+| `summary` | `summary` | `str \| None` / `string?` | Summariser output in deliberation mode. `None` / `undefined` when the debate stopped early, in other modes, or when the summariser call failed |
+| `duration_ms` | `durationMs` | `int` / `number` | Debate wall-clock time (ms) |
+| `total_tokens` | `totalTokens` | `int` / `number` | Tokens used by persona and summariser calls |
+| `total_cost_usd` | `totalCostUsd` | `float \| None` / `number \| null` | Sum of the persona and summariser calls that reported a cost; null when none did |
+| `unpriced_calls` | `unpricedCalls` | `int` / `number` | Debate calls that reported no cost. Non-zero means `total_cost_usd` is a lower bound |
+| `persona_biases` | `personaBiases` | `dict[str, str]` / `Record<string, string>` | Persona name to `known_bias`, for personas that declare one. The LLM judge sees these |
 
 ### Persona response fields
 
@@ -366,12 +425,11 @@ When confidence is too low, the input goes through persona debate and a judge pr
 | `confidence` | `confidence` | `float` / `number` | This persona's confidence |
 | `reasoning` | `reasoning` | `str` / `string` | Full reasoning chain |
 | `key_factors` | `keyFactors` | `list[str]` / `string[]` | Key decision factors |
-| `dissent_notes` | `dissentNotes` | `str \| None` / `string \| null` | Rebuttal in deliberation/adversarial modes |
+| `dissent_notes` | `dissentNotes` | `str \| None` / `string?` | Rebuttal in deliberation/adversarial modes |
+| `raw_response` | `rawResponse` | `str \| None` / `string?` | The model's raw reply |
 | `tokens_used` | `tokensUsed` | `int` / `number` | Tokens consumed |
-| `cost_usd` | `costUsd` | `float \| None` / `number \| null` | API cost for this call |
+| `cost_usd` | `costUsd` | `float \| None` / `number?` | API cost for this call; null when the client reported none |
 | `failed` | `failed` | `bool` / `boolean?` | True when this response is a placeholder for a failed persona call. Failed responses stay in the transcript for audit but carry no vote |
-
-`DebateTranscript` also includes `summary` (Python: `str | None`, TypeScript: `string?`) — a structured summary produced during the Summarisation stage of the deliberation pipeline (null/undefined in non-deliberation modes).
 
 ## Choosing What To Use
 
@@ -414,12 +472,32 @@ When confidence is too low, the input goes through persona debate and a judge pr
 
 ### Important Notes
 
-- **Temperature is handled automatically.** The SDK omits the temperature parameter for reasoning models (`gpt-5*`, `o1*`, `o3*`). No configuration needed.
-- **Escalation is strictly `< threshold`** — confidence exactly equal to the threshold does NOT escalate.
-- **Automatic retry**: All LLM calls retry up to 3 times with exponential backoff (via tenacity).
-- **Default debate mode is deliberation** for maximum value — it runs the full 4-stage CEJ pipeline. For cheaper/faster operation, use `DebateConfig(mode=DebateMode.INDEPENDENT)` (Python) or `{ mode: DebateMode.Independent }` (TypeScript).
-- **Cost tracking is Python-only** — `total_cost_usd` on verdicts is estimated from token usage via litellm's model pricing table, not from provider billing. Accurate for known models; may be `None` for unrecognised ones. In TypeScript, `totalCostUsd` is always `undefined` unless a custom `llmClient` provides cost data (no viable npm cost-estimation library exists).
+- **Temperature is handled automatically.** The SDK omits the temperature parameter for reasoning models (`gpt-5*`, `o1*`, `o3*`, also behind a provider prefix such as `openai/gpt-5-mini`). No configuration needed.
+- **Escalation is strictly `< threshold`**: confidence exactly equal to the threshold does NOT escalate. A missing or non-numeric primary confidence (NaN, a string) always escalates.
+- **Automatic retry**: each LLM call gets 3 attempts in total (the first try plus 2 retries) on connection errors, timeouts, 429 and 5xx responses; other errors fail at once. The client waits for the provider's `Retry-After` header when it sends one (capped at 60 s) and backs off exponentially otherwise. Change the count with `LiteLLMClient(max_attempts=...)` / `new LiteLLMClient({ maxAttempts })`.
+- **Default debate mode is deliberation**, the full 4-stage CEJ pipeline. For cheaper and faster runs use `DebateConfig(mode=DebateMode.INDEPENDENT)` (Python) or `new DebateConfig({ mode: DebateMode.INDEPENDENT })` (TypeScript).
+- **Deliberation stops early** after any round, the opening one included, when the personas' labels are unanimous or `early_stop_min_confidence` is met. A debate that stops early has no summary.
+- **Latency and cost of an escalation**: a debate makes several rounds of LLM calls. Live runs in February 2026 with the default `gpt-5-mini`, three personas and a mix of debate modes and judges took 27 to 57 s and cost $0.007 to $0.015 per escalated item. Use that as a rough guide only; your models, personas and inputs will change it. The fast path costs one primary classifier call.
+- **Cost tracking**: Python estimates each call's cost from litellm's model pricing table (not from provider billing), so a model litellm does not price reports `None`. The TypeScript `LiteLLMClient` never reports cost; inject a custom `llmClient` that returns `costUsd` if you need it. Unknown cost is `None` / `null`, never 0. An escalated `total_cost_usd` includes the primary classifier, is `None` / `null` when the primary cost or the whole debate cost is unknown, and is a lower bound when `debate_transcript.unpriced_calls > 0`.
+- **The cost cap is checked twice.** Before a debate, `estimated_max_debate_cost_usd` is compared with `max_debate_cost_usd`; the estimate counts every persona call in every round, the summariser in deliberation mode and the judge when it is an `LLMJudge`, each at `estimated_cost_per_persona_usd` (default $0.01 per call). During the debate, reported spend is compared with the cap, and calls that reported no cost are charged at that same per-call estimate.
 - **Empty personas disables escalation**: If you pass `personas=[]`, the jury always returns the primary classifier result.
+
+## Prompt injection and untrusted input
+
+The text you classify ends up inside the prompts of `LLMClassifier`, every persona, the summariser and `LLMJudge`. Escalated items are the borderline ones, which is also where a crafted input would aim.
+
+What the SDK does:
+
+- Every prompt puts the input inside `<input>` tags, after a note telling the model that the content is untrusted data and not instructions. Any `<input>` or `</input>` tags in the text are neutralised so it cannot close the fence early.
+- `LLMClassifier`, `LLMJudge` and the personas request JSON output whose `label` is an enum of your labels. Providers that enforce strict `json_schema` output can only answer with those labels.
+- Every label a model returns is checked against your labels (exact match, then case-insensitive). An out-of-set persona label counts as a failed response, and an out-of-set judge label falls back to a vote over the personas (`llm_judge_fallback_invalid_label`), so a label the input smuggles in never becomes the verdict.
+
+What you should still do:
+
+- Cap input length before calling `classify`. The SDK has no limit, and every call in a debate pays for the full input.
+- Treat verdicts on adversarial input with care. Fencing makes injection harder, not impossible, and a persuasive input can still push the personas toward one of your labels.
+- Route degraded and fallback verdicts to human review: `debate_degraded` / `debateDegraded` is true, or `judge_strategy` is `cost_guard_*` or `llm_judge_fallback_*`.
+- Never execute, `eval` or template anything taken from a verdict's reasoning text.
 
 ## SDK API Reference
 
@@ -479,10 +557,11 @@ response_format)`. See per-package READMEs for usage.
 | Debate config | `debate_config=None` | `debateConfig` |
 | Escalation override | `escalation_override=None` | `escalationOverride` |
 | Debate cost cap | `max_debate_cost_usd=None` | `maxDebateCostUsd` |
+| Estimated cost per LLM call | `estimated_cost_per_persona_usd=0.01` | `estimatedCostPerPersonaUsd=0.01` |
 | Debate concurrency | `debate_concurrency=5` | `debateConcurrency=5` |
 | Escalation callback | `on_escalation=None` | `onEscalation` |
 | Cost-estimate gate | `on_cost_estimate=None` | `onCostEstimate` |
-| Verdict callback | `on_verdict=None` | `onVerdict` |
+| Verdict callback (every verdict) | `on_verdict=None` | `onVerdict` |
 | LLM transport override | `llm_client=None` | `llmClient` |
 | Logger override | `logger=None` (defaults to `logging.getLogger(__name__)`) | `logger` (defaults to silent `NOOP_LOGGER`; pass `console` to opt in) |
 
@@ -497,7 +576,9 @@ Behavior notes:
 
 - Escalation condition is strictly `< threshold` (exactly equal does not escalate).
 - If `personas` is empty, jury escalation is effectively disabled.
-- If `max_debate_cost_usd` / `maxDebateCostUsd` is exceeded, result falls back to primary classifier with `judge_strategy` / `judgeStrategy` set to `cost_guard_primary_fallback`.
+- `on_verdict` / `onVerdict` fires once for every verdict `classify` returns: fast path, cost-guard fallbacks and judged verdicts.
+- `estimated_max_debate_cost_usd` / `estimatedMaxDebateCostUsd` is the pre-flight estimate: (persona calls + summariser call in deliberation mode + 1 for an `LLMJudge`) x `estimated_cost_per_persona_usd`. Persona calls are `len(personas) x max_rounds` in deliberation mode and `len(personas)` in the other modes. If it exceeds the cap, no debate runs and `judge_strategy` is `cost_guard_pre_flight`.
+- If spend during the debate exceeds `max_debate_cost_usd` / `maxDebateCostUsd`, the result falls back to the primary classifier with `judge_strategy` / `judgeStrategy` set to `cost_guard_primary_fallback`.
 
 Stats:
 
@@ -512,11 +593,11 @@ Stats:
 | `max_rounds` / `maxRounds` | `2` | Max deliberation rounds |
 | `include_primary_result` / `includePrimaryResult` | `true` | Include primary result in prompts |
 | `include_confidence` / `includeConfidence` | `true` | Include confidence in prompt context |
-| `early_stop_min_confidence` / `earlyStopMinConfidence` | `None` / `undefined` | **F7:** opt-in high-confidence early stop for DELIBERATION mode. When set, the loop exits after any round whose **minimum** persona confidence is `>=` this value, even if personas disagree on label. |
+| `early_stop_min_confidence` / `earlyStopMinConfidence` | `None` / `undefined` | Opt-in early stop for deliberation mode. When set, the debate ends after any round, the opening one included, whose **lowest** persona confidence is `>=` this value, even if personas disagree on label. Unanimous labels end it regardless. |
 
 Modes:
 
-- `deliberation` (default): full 4-stage CEJ pipeline with optional early consensus
+- `deliberation` (default): full 4-stage CEJ pipeline; ends after any round whose labels are unanimous (no summary then)
 - `independent`: all personas respond independently
 - `sequential`: personas see previous responses in order
 - `adversarial`: assigns prosecution/defense stances
@@ -550,20 +631,22 @@ All classifiers implement `classify(text)` and expose `labels`.
 Behavior notes:
 
 - If `system_prompt` / `systemPrompt` is not set, a default classification prompt is applied automatically.
-- Expects model JSON response with `label` and `confidence`
-- If JSON parse fails, falls back to first label (or `"unknown"`) with `confidence=0`
+- Sends a JSON schema with your labels as an enum and expects `label` and `confidence` back. The label is matched to your labels (exact, then case-insensitive) and returned in your spelling.
+- Output it cannot use returns confidence 0, so the jury escalates it, with the reason in `raw_output["error"]` / `rawOutput.error`: `invalid_json` or `label_not_in_labels` (label becomes the first configured label), or `invalid_confidence` (label kept).
 
 #### Sklearn Classifier
 
 - Python: `SklearnClassifier(model, labels, vectorizer=None)` uses `predict_proba`
 - TypeScript: `new SklearnClassifier(model, labels, vectorizer?)` where model has `predictProba(...)`
+- Probability columns are named by the model's `classes_` (TS: `classes`) when those are the same set as `labels`, otherwise by position. A label count that differs from `classes_` raises. Python runs inference in a worker thread.
 
 #### HuggingFace Classifier
 
-- Python: `HuggingFaceClassifier(model_name, device="cpu")` (requires `transformers`)
-- TypeScript: `new HuggingFaceClassifier({ modelName?, device?, pipeline? })`
+- Python: `HuggingFaceClassifier(model_name, device="cpu", labels=None)` (requires `transformers`; inference runs in a worker thread)
+- TypeScript: `new HuggingFaceClassifier({ modelName?, device?, pipeline?, labels? })`
   - Uses injected `pipeline` or loads `@xenova/transformers`
   - Must provide `modelName` or `pipeline` (constructor throws otherwise)
+- Without `labels`, the label list comes from the model's full score list on the first call.
 
 ### Judge Strategies
 
@@ -588,9 +671,10 @@ Final confidence based on confidence-weighted label scores.
 
 Behavior notes:
 
-- Judge receives full transcript prompt
-- If JSON parse fails, falls back to primary result with strategy marker:
-  - `llm_judge_fallback_invalid_json`
+- Judge receives the full transcript (all rounds, the summary and each persona's `known_bias`) and a JSON schema with your labels as an enum.
+- On success `judge_strategy` is `llm_judge` and `judge_details` / `judgeDetails` holds the judge's key agreements, key disagreements and decisive factor.
+- If the judge call fails or its output is unusable, the verdict is a majority vote over the final round's valid persona responses, marked `llm_judge_fallback_error`, `llm_judge_fallback_invalid_json`, `llm_judge_fallback_invalid_label` or `llm_judge_fallback_invalid_confidence`. If the final round has no valid responses, the primary classifier result is returned under the same marker.
+- If every persona call failed, the judge makes no LLM call and returns the primary classifier result as `llm_judge_fallback_personas_failed`.
 
 #### Bayesian Judge
 
@@ -620,22 +704,24 @@ Default threshold candidates when not provided:
 
 #### Python
 
-- `LiteLLMClient.complete(model, system_prompt, prompt, temperature)`
-- Uses `litellm.acompletion`
-- Returns: `{content, tokens, cost_usd}` (`cost_usd` may be `None`)
+- `LiteLLMClient(timeout_seconds=60.0, max_attempts=3, api_key=None, api_base=None)`; pass it to `Jury(llm_client=...)`
+- `timeout_seconds` bounds each request (`None` keeps litellm's own default); `max_attempts` counts the first try; `api_key` and `api_base` are passed to litellm when set
+- `complete(model, system_prompt, prompt, temperature=0.0, response_format=None)` calls `litellm.acompletion`
+- Returns: `{content, tokens, cost_usd}` (`cost_usd` is `None` when litellm cannot price the model)
 - Raises a runtime error if `litellm` is not installed and no custom `llm_client` is injected.
 
 #### TypeScript
 
-- `new LiteLLMClient({ baseUrl?, apiKey?, timeoutMs? })`
+- `new LiteLLMClient({ baseUrl?, apiKey?, timeoutMs?, maxAttempts?, logger? })`; `timeoutMs` defaults to 60000 per attempt and `maxAttempts` to 3 (first try included)
 - Falls back to env vars:
   - `LITELLM_BASE_URL`, `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
   - `LITELLM_API_KEY`, `OPENAI_API_KEY`
 - Sends `POST /chat/completions`
-- Returns `{content, tokens, costUsd}` — `costUsd` is always `undefined` because no viable npm cost-estimation library exists. A custom `llmClient` can provide cost data if needed.
-- Throws before request if no API key is configured.
+- Returns `{content, tokens, costUsd}`. `costUsd` is always `undefined` because no viable npm cost-estimation library exists; a custom `llmClient` can provide cost data if needed.
+- Throws `No API key configured. Set LITELLM_API_KEY or OPENAI_API_KEY, or inject a custom llmClient.` before sending a request when there is no key.
+- The client `Jury` creates by default logs retries through the Jury's `logger`.
 
-Temperature is automatically omitted for reasoning models (`gpt-5*`, `o1*`, `o3*`).
+Both clients retry connection errors, timeouts, 429 and 5xx responses, honour `Retry-After` (capped at 60 s), and omit temperature for reasoning models (`gpt-5*`, `o1*`, `o3*`, with or without a provider prefix).
 
 ## Testing
 
@@ -667,23 +753,29 @@ The most common gotchas across both SDKs. For the full list with code examples, 
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Auth / 401 on first LLM call | `OPENAI_API_KEY` not set, or wrong provider for the model | `export OPENAI_API_KEY=...` or pass an explicit client (`LiteLLMClient(api_key=...)` / `new LiteLLMClient({ apiKey })`) |
-| Verdict label is the first label with `confidence=0` | `LLMClassifier` couldn't parse the model's JSON response (persona path is schema-constrained via F2; classifier path is not yet — audit S3) | Use a model that supports `response_format`; or wrap with `FunctionClassifier` to control parsing yourself |
-| Repeated 429s after retries | Rate-limit budget exhausted; SDK retries 3× exponential but doesn't honour `Retry-After` (R7) | Lower `debate_concurrency` / `debateConcurrency`; use a higher-tier key |
-| `judge_strategy` / `judgeStrategy` is `cost_guard_pre_flight` | Pre-flight estimate exceeded `max_debate_cost_usd` — no debate ran | Raise the cap or lower `max_rounds` |
-| `judge_strategy` / `judgeStrategy` is `cost_guard_primary_fallback` | Actual mid-debate spend hit the cap mid-flight | Same — and note spend can still overshoot by up to one concurrency-batch |
-| `judge_strategy` / `judgeStrategy` is `cost_guard_user_override` | Your `on_cost_estimate` / `onCostEstimate` callback returned False | Working as intended — debate skipped per your policy |
+| Auth / 401 on first LLM call | `OPENAI_API_KEY` not set, or wrong provider for the model | `export OPENAI_API_KEY=...` or pass an explicit client (`llm_client=LiteLLMClient(api_key=...)` / `llmClient: new LiteLLMClient({ apiKey })`) |
+| Primary result has `confidence` 0 and the item always escalates | `LLMClassifier` could not use the model's reply; `primary_result.raw_output["error"]` / `primaryResult.rawOutput.error` says why (`invalid_json`, `label_not_in_labels`, `invalid_confidence`) | Use a model that honours `response_format` JSON schemas; or wrap your own call in `FunctionClassifier` to control parsing |
+| Repeated 429s after retries | Rate-limit budget exhausted after 3 attempts per call (the SDK already waits for `Retry-After`, up to 60 s) | Lower `debate_concurrency` / `debateConcurrency` and batch `concurrency`; raise `max_attempts` / `maxAttempts`; use a higher-tier key |
+| `judge_strategy` / `judgeStrategy` is `cost_guard_pre_flight` | Pre-flight estimate exceeded `max_debate_cost_usd`; no debate ran. The estimate counts the summariser and LLM judge calls too, so a cap set for an older version can now trip | Raise the cap, lower `max_rounds`, or lower `estimated_cost_per_persona_usd` if your calls cost less |
+| `judge_strategy` / `judgeStrategy` is `cost_guard_primary_fallback` | Spend during the debate hit the cap. Calls that reported no cost are charged at `estimated_cost_per_persona_usd` | Same as above; spend can still overshoot by up to one concurrency batch |
+| `judge_strategy` / `judgeStrategy` is `cost_guard_user_override` | Your `on_cost_estimate` / `onCostEstimate` callback returned False | Working as intended: the debate was skipped per your policy |
+| `judge_strategy` / `judgeStrategy` is `llm_judge_fallback_error` | The LLM judge call failed (after retries) | The verdict is a majority vote over the final round. Check the judge model and key; consider routing these to review |
+| `judge_strategy` / `judgeStrategy` is `llm_judge_fallback_invalid_json`, `_invalid_label` or `_invalid_confidence` | The judge replied with unparseable JSON, a label outside your labels, or a non-numeric confidence | Same majority-vote fallback. Use a judge model that honours `response_format` |
+| `judge_strategy` / `judgeStrategy` is `llm_judge_fallback_personas_failed` | Every persona call failed, so there was nothing to judge | The primary classifier result is returned; see `debate_degraded` below |
 | Verdict is never escalated even at low confidence | `personas=[]` silently disables escalation (by design) | Pass at least one persona |
-| `debate_degraded` / `debateDegraded` is true | One or more persona calls failed (auth, rate-limit exhaustion, unparseable output). Failed personas carry no vote; if the whole panel failed the primary classifier result is returned | Inspect `persona_failures` / `personaFailures` and the transcript's `failed` responses; consider routing degraded verdicts to human review |
-| `total_cost_usd` / `totalCostUsd` is `None` / `undefined` | Python: model not in litellm's pricing table. TypeScript: no built-in cost estimation (no viable npm library) | Python: pin to a known-priced model. TS: inject a custom `llmClient` that fills `costUsd` |
+| `debate_degraded` / `debateDegraded` is true | One or more persona calls failed (auth, rate-limit exhaustion, unparseable output, a label outside your labels). Failed responses stay in the transcript with `failed=True` and carry no vote; if the whole final round failed, the primary classifier result is returned | Inspect `persona_failures` / `personaFailures` and the transcript's `failed` responses; consider routing degraded verdicts to human review |
+| `total_cost_usd` / `totalCostUsd` is `None` / `null` | Python: the model is not in litellm's pricing table, or the primary classifier reported no cost. TypeScript: the default client never reports cost | Python: pin to a known-priced model. TS: inject a custom `llmClient` that fills `costUsd` |
+| `total_cost_usd` looks too low | Some calls reported no cost; `debate_transcript.unpriced_calls` counts them and the total is a lower bound | Same as above |
 | TypeScript logs are silent | TS `Jury` defaults to `NOOP_LOGGER` | `new Jury({ ..., logger: console })` |
-| TypeScript hangs ~60s then aborts | Default `timeoutMs = 60_000` | `new LiteLLMClient({ timeoutMs: 30_000 })` |
+| A call hangs about 60 s, then aborts | Default request timeout is 60 s per attempt in both SDKs (timeouts are retried) | `new LiteLLMClient({ timeoutMs: 30_000 })` / `LiteLLMClient(timeout_seconds=30)` |
 
-For known open issues and roadmap, see [`AUDIT.md`](AUDIT.md) (§1 Bugs, §3 Reliability, §9 Prioritised Roadmap).
+Known problems and their status are tracked in [`docs/REVIEW.md`](docs/REVIEW.md).
 
 ## CLI (Secondary)
 
 The product is SDK-first. CLI is provided for batch workflows.
+
+Both packages install an `llm-jury` command: `pip install llm-jury-classifier`, or `npm install @llm-jury/core` and run `npx llm-jury`. Both read JSONL and write the same snake_case verdict rows.
 
 ### Commands
 
@@ -711,6 +803,12 @@ The product is SDK-first. CLI is provided for batch workflows.
 - `--output` (required)
 - `--threshold` default `0.7`
 - `--concurrency` default `10`
+
+### Input rows and exit codes
+
+- With `--classifier function` (the default) the CLI replays predictions stored in the input, so every row needs `text`, `predicted_label` and `predicted_confidence` (a number from 0 to 1). The ground-truth `label` field is never read as a prediction, and rows that repeat a text must repeat its prediction.
+- Bad usage exits with code 2 before any LLM call: a missing or out-of-range option value, an unknown `--debate-mode`, or input rows without their predictions.
+- `classify` writes a `{"text", "error"}` row for each input that failed and keeps the verdicts that succeeded. It exits with code 1 only when every row failed.
 
 ### Calibrate-only options
 

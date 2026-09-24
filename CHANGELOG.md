@@ -14,14 +14,26 @@ marked **[py]** or **[ts]**.
 ### Added
 - `Verdict.judge_details` / `judgeDetails`: the LLM judge's key agreements,
   key disagreements and decisive factor (previously requested and dropped).
+  `None` / `null` for other judges and for fallback verdicts.
 - `DebateTranscript.unpriced_calls` / `unpricedCalls` (LLM calls that reported
   no cost) and `DebateTranscript.persona_biases` / `personaBiases` (persona
   `known_bias` values, now shown to the LLM judge as an expert roster).
 - **[py]** `LiteLLMClient(timeout_seconds=60.0, max_attempts=3, api_key=None,
-  api_base=None)`. **[ts]** `LiteLLMClientOptions.maxAttempts`.
+  api_base=None)`. **[ts]** `LiteLLMClientOptions.maxAttempts`. Both count
+  total attempts, the first one included, so the default is one try plus two
+  retries.
 - **[ts]** `HuggingFaceClassifier` accepts a `labels` option.
 - New `judge_strategy` markers: `llm_judge_fallback_error`,
   `llm_judge_fallback_invalid_label`, `llm_judge_fallback_invalid_confidence`.
+  The README troubleshooting tables list every marker.
+- `LLMClassifier` results that could not be used carry the reason in
+  `raw_output["error"]` / `rawOutput.error` (`invalid_json`,
+  `label_not_in_labels`, `invalid_confidence`).
+- **[ts]** `package.json` declares `engines.node` `>=20` and a `default`
+  export condition, so `require("@llm-jury/core")` works on Node 20.19+ and
+  22.12+. The package is still ES modules only.
+- README section "Prompt injection and untrusted input": what the SDK does
+  with untrusted text and what callers should still do.
 
 ### Changed
 - `LLMClassifier` and `LLMJudge` send strict JSON-schema `response_format`
@@ -29,7 +41,7 @@ marked **[py]** or **[ts]**.
   `response_format` on classifier and judge calls too.
 - Labels from personas, `LLMClassifier` and `LLMJudge` are matched to the
   configured labels (exact, then case-insensitive) and returned in the
-  configured spelling.
+  configured spelling. An out-of-set persona label is a failed response.
 - `llm_judge_fallback_invalid_json` now returns a majority vote over the final
   round instead of the primary result. All LLM-judge fallbacks return the
   primary result only when the final round has no valid votes.
@@ -40,21 +52,34 @@ marked **[py]** or **[ts]**.
   `HuggingFaceClassifier` and `SklearnClassifier` report a cost of 0.
 - `estimated_cost_per_persona_usd` now means the estimated cost per LLM call,
   and `estimated_max_debate_cost_usd` counts the summariser and LLM judge
-  (8 calls instead of 6 for 3 personas x 2 rounds). Existing
-  `max_debate_cost_usd` values may now stop debates at pre-flight.
+  (8 calls instead of 6 for 3 personas x 2 rounds). Single-round modes
+  (independent, sequential, adversarial) count one round instead of
+  `max_rounds`. Existing `max_debate_cost_usd` values may now stop debates at
+  pre-flight (`cost_guard_pre_flight`).
 - Deliberation ends after the opening round when its labels are unanimous or
   `early_stop_min_confidence` is met (no second round, no summary).
-- Every prompt wraps the input in `<input>` tags with a note that it is
-  untrusted data.
 - CLI `--classifier function` requires `predicted_label` and
   `predicted_confidence` on every row; it no longer reads the ground-truth
-  `label` as a prediction.
+  `label` as a prediction. Rows without them are a usage error (exit code 2).
 - CLI numeric flags are range-checked and an invalid `--debate-mode` is a
   usage error (exit code 2) in both SDKs.
 - **[py]** `HuggingFaceClassifier` and `SklearnClassifier` run inference in a
   worker thread.
 - `SklearnClassifier` maps probability columns by the model's `classes_` /
   `classes` when they name the labels, and rejects a label count mismatch.
+- **[ts]** `Jury` passes its `logger` to the default `LiteLLMClient`, which
+  logs each retry.
+- **[py]** Requires `typer>=0.16` (typer 0.12.3 and older crash the CLI at
+  start, and 0.13 to 0.15.4 crash with click 8.3) and `litellm<2`.
+- Releases: the release workflow runs the Python and TypeScript tests, lint
+  and type-check on the bumped tree before pushing anything, pushes nothing
+  on a dry run, and never moves or force-pushes an existing tag. CI installs
+  the built wheel and npm tarball and runs the installed `llm-jury` command.
+
+### Security
+- Every prompt wraps the input in `<input>` tags with a note that it is
+  untrusted data, and neutralises `<input>` / `</input>` tags inside the
+  text so it cannot close the fence early.
 
 ### Fixed
 - Verdicts could carry labels outside the configured set (for example an LLM
@@ -69,6 +94,7 @@ marked **[py]** or **[ts]**.
   now charged at the per-call estimate. Float noise at an exact cap no longer
   discards a finished debate.
 - Cache hits were billed again in verdict totals and against the cost cap.
+  A hit now reports a cost of 0 and `cached: true`.
 - `on_verdict` / `onVerdict` fired only for judged verdicts; it now fires for
   every verdict, including the fast path and cost-guard fallbacks.
 - Fail-fast `classify_batch` kept starting debates after it had rejected.
@@ -86,8 +112,21 @@ marked **[py]** or **[ts]**.
   top result.
 - CLI `calibrate` with the `function` classifier reported perfect accuracy by
   reading ground truth as predictions.
+- The wheel, sdist and npm tarball now include the MIT `LICENSE` file, and the
+  package READMEs link to it (and to `docs/REVIEW.md`) with absolute URLs that
+  work on PyPI and npm.
+- Documentation: the root README named the Python package `llm-jury`, which
+  on PyPI is an unrelated project (install `llm-jury-classifier`). README
+  snippets used `DebateMode.Independent` (the key is `INDEPENDENT`) and a
+  `LiteLLMClient(api_key=...)` that did not exist yet. The TypeScript
+  troubleshooting table quoted error messages the code never produced, and
+  the docs said failed personas were dropped (they stay in the transcript with
+  `failed=True`) and that LLM calls retry 3 times (it is 3 attempts in total).
+  Docs cited an `AUDIT.md` that was never committed; they now point to
+  `docs/REVIEW.md`. The sample verdicts are marked illustrative, and the
+  README gives the latency and cost measured in live runs.
 
-## [0.2.0] — 2026-08
+## [0.2.0] - 2026-08
 
 ### Added
 - **Debate health surfaced on `Verdict`** (both SDKs).
@@ -173,9 +212,7 @@ marked **[py]** or **[ts]**.
 - **[py]** Unused `best = asyncio.run(...)` assignment dropped in
   CLI `calibrate` (calibrator mutates `jury.threshold` in place).
 - **[py]** 32 files reformatted by `black` (whitespace / line wrap
-  only — no semantic changes).
-
-### Changed
+  only, no semantic changes).
 - **[py][ts]** `FakeLLMClient` test helper now prefers a
   `system_prompt` match over a user-prompt match when routing
   per-persona responses. The user prompt in deliberation rounds
@@ -221,7 +258,7 @@ marked **[py]** or **[ts]**.
   `TypeError`, not just the targeted one). Fixture now matches the
   real client signature; tests assert non-failed personas succeed.
 
-## [0.1.1] — 2026-04 / 2026-05 (initial published versions)
+## [0.1.1] - 2026-04 / 2026-05 (initial published versions)
 
 The initial released version of both SDKs. Highlights of what landed
 before this CHANGELOG was started, ordered from oldest to newest:
@@ -263,5 +300,6 @@ before this CHANGELOG was started, ordered from oldest to newest:
   TS examples against the built package surface.
 - Lock files committed for reproducibility.
 
-[Unreleased]: https://github.com/mokhld/llm-jury/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/mokhld/llm-jury/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mokhld/llm-jury/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/mokhld/llm-jury/releases/tag/v0.1.1

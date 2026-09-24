@@ -178,8 +178,8 @@ LLM clients (no network).
 
 | ID | Severity | Problem | Evidence | Status |
 |---|---|---|---|---|
-| REL-01 | high | `release.yml:97-115` commits to main and force-pushes the tag before tests run, also on `dry_run`; re-running moves an existing tag. v0.2.0 was published to PyPI from `8809991` and to npm from `02e63be`. Release tests skip tsc and lint and CI status. | VERIFIED (workflow read, `gh run` history) | open |
-| DOC-01 | high | Root README Overview says the Python package is `llm-jury`; that name on PyPI is an unrelated project that ships the same `llm_jury` import package. | VERIFIED | open |
+| REL-01 | high | `release.yml:97-115` commits to main and force-pushes the tag before tests run, also on `dry_run`; re-running moves an existing tag. v0.2.0 was published to PyPI from `8809991` and to npm from `02e63be`. Release tests skip tsc and lint and CI status. | VERIFIED (workflow read, `gh run` history) | fixed (2026-09-24) |
+| DOC-01 | high | Root README Overview says the Python package is `llm-jury`; that name on PyPI is an unrelated project that ships the same `llm_jury` import package. | VERIFIED | fixed (2026-09-24) |
 | AD-01 | high | TS `HuggingFaceClassifier` calls the pipeline without top-k options and freezes `labels` from the first call's single top result, so debates run over one allowed label. No `labels` option (Python has one). | VERIFIED with injected pipeline; library default INFERRED | fixed (2026-09-24, PR #23) |
 | BUG-05 | medium | `on_verdict` / `onVerdict` fires only on judged verdicts, not fast path or cost-guard verdicts (most traffic). | VERIFIED both SDKs | fixed (2026-09-24, PR #23) |
 | BUG-06 | medium | Consensus and `early_stop_min_confidence` are checked only after rounds 2+, so at default `max_rounds=2` early stop never saves a call; a unanimous opening round still pays for round 2 and the summariser. | VERIFIED both SDKs | fixed (2026-09-24, PR #23) |
@@ -188,12 +188,12 @@ LLM clients (no network).
 | BUG-10 | medium | `Persona.known_bias` never reaches any prompt although the judge is told to weigh it; LLM judge's `key_agreements`, `key_disagreements`, `decisive_factor` are requested and discarded. | VERIFIED | fixed (2026-09-24, PR #23) |
 | AD-02 | medium | Python HF and sklearn adapters run blocking inference inside `async def`, stalling the event loop. | INFERRED from code | fixed (2026-09-24, PR #23) |
 | AD-03 | medium | Sklearn adapters map `predict_proba` columns to `labels` by position, ignoring `classes_` order. | INFERRED from code | fixed (2026-09-24, PR #23) |
-| DOC-02 | medium | README snippets that fail: `DebateMode.Independent` (real key `INDEPENDENT`; in plain JS it silently runs deliberation and makes the pre-flight estimate NaN); `LiteLLMClient(api_key=...)`; TS error strings in troubleshooting tables; "failed personas are dropped" (they stay with `failed=True`); cost docs claim `undefined`/`None` where code returns 0. | VERIFIED | open |
-| DOC-03 | medium | Missing `AUDIT.md` cited in README, CONTRIBUTING, SECURITY; SECURITY.md supports only 0.1.x; CHANGELOG has two `### Changed` headings and stale compare links; CONTRIBUTING cites `examples/python/` (does not exist) and a `uv sync` flow that lacks pytest. | VERIFIED | open |
-| PKG-01 | medium | No LICENSE in wheel, sdist or npm tarball; package READMEs link `../../LICENSE`; no `engines` field; `exports` has no `require`/`default` condition. | VERIFIED | open |
-| PKG-02 | medium | `typer>=0.9` is too low: typer <=0.12.3 crashes the CLI at start; 0.13-0.15.4 with click 8.3 also crash. `litellm>=1.0` has no upper bound. | VERIFIED by the infra review | open |
-| CI-01 | medium | CI tests editable installs and TS sources, never the built wheel or packed tarball; Node matrix is 22 only; lockfiles unused (`npm install`, not `npm ci`); unquoted `tests/**/*.test.ts` glob only matches one directory level. | VERIFIED | open |
-| DOC-04 | medium | Latency and cost claims (README sample 2.8 s / $0.001; value-analysis 2-5 s / $0.001-0.005) disagree with the Feb 2026 live runs in `.test-artifacts/` (27-57 s, $0.007-0.015 per escalation). | VERIFIED against local artifacts | open |
+| DOC-02 | medium | README snippets that fail: `DebateMode.Independent` (real key `INDEPENDENT`; in plain JS it silently runs deliberation and makes the pre-flight estimate NaN); `LiteLLMClient(api_key=...)`; TS error strings in troubleshooting tables; "failed personas are dropped" (they stay with `failed=True`); cost docs claim `undefined`/`None` where code returns 0. | VERIFIED | fixed (2026-09-24) |
+| DOC-03 | medium | Missing `AUDIT.md` cited in README, CONTRIBUTING, SECURITY; SECURITY.md supports only 0.1.x; CHANGELOG has two `### Changed` headings and stale compare links; CONTRIBUTING cites `examples/python/` (does not exist) and a `uv sync` flow that lacks pytest. | VERIFIED | fixed (2026-09-24) |
+| PKG-01 | medium | No LICENSE in wheel, sdist or npm tarball; package READMEs link `../../LICENSE`; no `engines` field; `exports` has no `require`/`default` condition. | VERIFIED | fixed (2026-09-24) |
+| PKG-02 | medium | `typer>=0.9` is too low: typer <=0.12.3 crashes the CLI at start; 0.13-0.15.4 with click 8.3 also crash. `litellm>=1.0` has no upper bound. | VERIFIED by the infra review | fixed (2026-09-24) |
+| CI-01 | medium | CI tests editable installs and TS sources, never the built wheel or packed tarball; Node matrix is 22 only; lockfiles unused (`npm install`, not `npm ci`); unquoted `tests/**/*.test.ts` glob only matches one directory level. | VERIFIED | fixed (2026-09-24) |
+| DOC-04 | medium | Latency and cost claims (README sample 2.8 s / $0.001; value-analysis 2-5 s / $0.001-0.005) disagree with the Feb 2026 live runs in `.test-artifacts/` (27-57 s, $0.007-0.015 per escalation). | VERIFIED against local artifacts | fixed (2026-09-24) |
 
 ## Part B: features to add or extend (ranked)
 
@@ -273,3 +273,49 @@ Known parity differences left in place:
   `toDict()`; the TS CLI converts them to snake_case.
 - The TS `LiteLLMClient` still never reports cost; pricing is FEAT-04 (reading LiteLLM's
   `x-litellm-response-cost` header is an easy first step).
+
+### 2026-09-24, docs, CI, packaging and release workflow
+
+Fixed REL-01, CI-01, PKG-01, PKG-02 and DOC-01 to DOC-04, and documented the PR #23
+changes in the three READMEs and CHANGELOG `[Unreleased]`.
+
+- Release (REL-01): one `prepare` job checks out main, bumps the version files (and the
+  workspace entry in `package-lock.json`), runs pytest, ruff, black, eslint, `npm run
+  check` and `npm test` on the bumped tree, then commits and tags locally. It pushes the
+  commit and tag together with `git push --atomic` (never `--force`) only when `dry_run`
+  is false and the tag is new. A remote tag already on the release commit (a re-run) is
+  left alone; a tag on any other commit fails the run before publishing. Publish jobs
+  check out the release commit by SHA; their OIDC publishing steps are unchanged. The
+  GitHub release is created only when missing, with `--verify-tag`.
+- CI (CI-01): `npm ci` at the repo root (the root lockfile covers the workspace; its stale
+  workspace entry was refreshed). Unit tests run on Node 22 and 24. New `python-package`
+  job builds the sdist and wheel, checks both contain LICENSE, installs the wheel into a
+  fresh venv and runs `llm-jury --help` plus an import whose `__version__` must match
+  `pyproject.toml`. New `npm-package` job (Node 20 and 22) packs the tarball, checks
+  LICENSE, installs it into an empty project and runs `npx llm-jury --help`, `npx llm-jury
+  --version` (must equal `package.json`), an ESM import and a `require()`. The TS test
+  glob is quoted so Node expands `tests/**/*.test.ts` recursively; the count is unchanged
+  (235: 234 pass, 1 skipped).
+- Packaging (PKG-01, PKG-02): `LICENSE` copied into both packages; Python uses `license =
+  "MIT"` and `license-files` (build requires setuptools>=77, and the License classifier is
+  dropped as PEP 639 requires); the npm `files` list includes LICENSE; `engines.node` is
+  `>=20`; `exports` gains a `default` condition so `require()` works on Node 20.19+ and
+  22.12+. Checked locally: the packed CLI and import run on Node 20.9, 20.19, 20.20, 22.11,
+  22.12 and 24.20 (also on 18.4, not declared). `typer>=0.16` (0.16.0 with click 8.3.1
+  runs the CLI) and `litellm>=1.0,<2`.
+- Docs (DOC-01 to DOC-04): package name and a warning about the unrelated `llm-jury` on
+  PyPI; broken snippets; TS error strings copied from the code; failed personas described
+  as kept with `failed=True`; retry wording (3 attempts in total); `AUDIT.md` references
+  replaced with this file; SECURITY.md supported versions and a README section on prompt
+  injection; CONTRIBUTING setup (`uv sync --extra dev`), layout and test counts; CHANGELOG
+  heading and links; the issue template's Discussions link now points to issues. Sample
+  verdicts are marked illustrative and the READMEs quote the Feb 2026 live-run range
+  (27 to 57 s, $0.007 to $0.015 per escalation).
+
+Left open:
+- PyPI and npm reject a version that is already published, so a release re-run after a
+  partial publish needs `target` set to the registry that failed. `skip-existing` was not
+  added, to keep the publish steps exactly as they were.
+- The release workflow does not check CI status on main before releasing.
+- The release workflow does not bump the editable package version in `uv.lock`; `uv sync`
+  rewrites it.
