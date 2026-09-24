@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-`llm-jury` is pre-1.0. Security fixes go to the latest `0.2.x` release
-and, once it ships, to `0.3.x`:
+`llm-jury` is pre-1.0. Security fixes go to the latest `0.3.x` release,
+and to `0.2.x` while users migrate:
 
 | Package                        | Supported versions             |
 | ------------------------------ | ------------------------------ |
-| `llm-jury-classifier` (Python) | `0.3.x` (upcoming), `0.2.x`    |
-| `@llm-jury/core` (TypeScript)  | `0.3.x` (upcoming), `0.2.x`    |
+| `llm-jury-classifier` (Python) | `0.3.x`, `0.2.x`               |
+| `@llm-jury/core` (TypeScript)  | `0.3.x`, `0.2.x`               |
 
 `0.1.x` no longer receives fixes. Upgrade to the latest published
 version before reporting.

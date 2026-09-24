@@ -11,6 +11,8 @@ marked **[py]** or **[ts]**.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-24
+
 ### Added
 - `Verdict.judge_details` / `judgeDetails`: the LLM judge's key agreements,
   key disagreements and decisive factor (previously requested and dropped).
@@ -334,6 +336,7 @@ before this CHANGELOG was started, ordered from oldest to newest:
   TS examples against the built package surface.
 - Lock files committed for reproducibility.
 
-[Unreleased]: https://github.com/mokhld/llm-jury/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mokhld/llm-jury/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mokhld/llm-jury/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mokhld/llm-jury/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/mokhld/llm-jury/releases/tag/v0.1.1
