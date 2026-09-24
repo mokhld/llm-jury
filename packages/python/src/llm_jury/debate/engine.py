@@ -13,6 +13,7 @@ from llm_jury.personas.base import Persona, PersonaResponse
 from llm_jury.personas.schema import build_persona_response_schema
 from llm_jury.utils import (
     add_costs,
+    format_confidence,
     match_label,
     parse_confidence,
     payload_cost,
@@ -529,7 +530,7 @@ class DebateEngine:
 
         if self.config.include_primary_result:
             confidence_suffix = (
-                f" (confidence: {primary.confidence:.2f})"
+                f" (confidence: {format_confidence(primary.confidence)})"
                 if self.config.include_confidence
                 else ""
             )
@@ -571,7 +572,7 @@ class DebateEngine:
 
         if self.config.include_primary_result:
             confidence_suffix = (
-                f" (confidence: {primary.confidence:.2f})"
+                f" (confidence: {format_confidence(primary.confidence)})"
                 if self.config.include_confidence
                 else ""
             )

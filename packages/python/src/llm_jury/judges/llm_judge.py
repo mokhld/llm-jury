@@ -8,6 +8,7 @@ from llm_jury.llm.client import LiteLLMClient, LLMClient
 from llm_jury.personas.schema import build_judge_response_schema
 from llm_jury.utils import (
     add_costs,
+    format_confidence,
     match_label,
     parse_confidence,
     payload_cost,
@@ -195,7 +196,7 @@ class LLMJudge(JudgeStrategy):
         lines = [
             f"Input:\n{wrap_untrusted(transcript.input_text)}",
             f"Available labels: {', '.join(labels)}",
-            f"Primary result: {transcript.primary_result.label} ({transcript.primary_result.confidence:.2f})",
+            f"Primary result: {transcript.primary_result.label} ({format_confidence(transcript.primary_result.confidence)})",
         ]
 
         persona_biases = getattr(transcript, "persona_biases", None) or {}

@@ -75,6 +75,17 @@ class NonFiniteConfidenceEscalationTests(unittest.IsolatedAsyncioTestCase):
         jury = self._jury(_StaticClassifier(ClassificationResult("safe", None)))  # type: ignore[arg-type]
         verdict = await jury.classify("text")
         self.assertTrue(verdict.was_escalated)
+        # Prompts render the unusable confidence as "unknown" instead of
+        # failing every persona call while formatting it.
+        self.assertEqual(verdict.persona_failures, 0)
+        self.assertEqual(verdict.label, "unsafe")
+
+    async def test_string_confidence_escalates_without_persona_failures(self) -> None:
+        jury = self._jury(_StaticClassifier(ClassificationResult("safe", "0.4")))  # type: ignore[arg-type]
+        verdict = await jury.classify("text")
+        self.assertTrue(verdict.was_escalated)
+        self.assertEqual(verdict.persona_failures, 0)
+        self.assertEqual(verdict.label, "unsafe")
 
     async def test_escalation_override_still_wins(self) -> None:
         jury = self._jury(

@@ -52,6 +52,11 @@ def is_finite_number(value: object) -> bool:
         return False
 
 
+def format_confidence(value: object) -> str:
+    """Render a confidence for a prompt: two decimals, or ``unknown`` when not finite."""
+    return f"{value:.2f}" if is_finite_number(value) else "unknown"
+
+
 def parse_confidence(value: object) -> float | None:
     """Parse a model-supplied confidence into [0.0, 1.0].
 
