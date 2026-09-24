@@ -33,7 +33,7 @@
     }
   },
   "bin": {
-    "llm-jury": "./dist/cli/bin.js"
+    "llm-jury": "dist/cli/bin.js"
   },
   "engines": {
     "node": ">=20"
