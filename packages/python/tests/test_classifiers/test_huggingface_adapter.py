@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import sys
+import threading
 import types
 import unittest
 
@@ -107,6 +109,75 @@ class HuggingFaceAdapterTests(unittest.IsolatedAsyncioTestCase):
         clf = HuggingFaceClassifier(model_name="m")
         result = await clf.classify("input")
         self.assertEqual(result.raw_output, payload)
+
+    async def test_reports_zero_cost(self) -> None:
+        def fake_pipeline(task: str, *, model: str, device: str, top_k):  # noqa: ANN001
+            return lambda text: [[{"label": "a", "score": 0.9}]]
+
+        _install_fake_transformers(fake_pipeline)
+        from llm_jury.classifiers.huggingface_adapter import HuggingFaceClassifier
+
+        result = await HuggingFaceClassifier(model_name="m").classify("input")
+        self.assertEqual(result.cost_usd, 0.0)
+
+    async def test_accepts_unwrapped_score_list(self) -> None:
+        payload = [{"label": "a", "score": 0.3}, {"label": "b", "score": 0.7}]
+
+        def fake_pipeline(task: str, *, model: str, device: str, top_k):  # noqa: ANN001
+            return lambda text: payload
+
+        _install_fake_transformers(fake_pipeline)
+        from llm_jury.classifiers.huggingface_adapter import HuggingFaceClassifier
+
+        clf = HuggingFaceClassifier(model_name="m")
+        result = await clf.classify("input")
+        self.assertEqual((result.label, result.confidence), ("b", 0.7))
+        self.assertEqual(clf.labels, ["a", "b"])
+
+    async def test_single_score_does_not_lock_labels(self) -> None:
+        def fake_pipeline(task: str, *, model: str, device: str, top_k):  # noqa: ANN001
+            return lambda text: [[{"label": "only", "score": 0.9}]]
+
+        _install_fake_transformers(fake_pipeline)
+        from llm_jury.classifiers.huggingface_adapter import HuggingFaceClassifier
+
+        clf = HuggingFaceClassifier(model_name="m")
+        await clf.classify("input")
+        # One score is not the full label distribution, so labels stay unset.
+        self.assertEqual(clf.labels, [])
+
+    async def test_empty_scores_raise(self) -> None:
+        def fake_pipeline(task: str, *, model: str, device: str, top_k):  # noqa: ANN001
+            return lambda text: [[]]
+
+        _install_fake_transformers(fake_pipeline)
+        from llm_jury.classifiers.huggingface_adapter import HuggingFaceClassifier
+
+        with self.assertRaisesRegex(RuntimeError, "no scores"):
+            await HuggingFaceClassifier(model_name="m").classify("input")
+
+    async def test_inference_runs_off_the_event_loop_thread(self) -> None:
+        loop_thread = threading.get_ident()
+        call_threads: list[int] = []
+        # Both calls must be inside the pipeline at once to pass the barrier, which
+        # only happens when inference does not block the event loop.
+        barrier = threading.Barrier(2, timeout=5)
+
+        def fake_pipeline(task: str, *, model: str, device: str, top_k):  # noqa: ANN001
+            def call(text: str):
+                call_threads.append(threading.get_ident())
+                barrier.wait()
+                return [[{"label": "a", "score": 0.6}, {"label": "b", "score": 0.4}]]
+
+            return call
+
+        _install_fake_transformers(fake_pipeline)
+        from llm_jury.classifiers.huggingface_adapter import HuggingFaceClassifier
+
+        clf = HuggingFaceClassifier(model_name="m")
+        results = await asyncio.gather(clf.classify("x"), clf.classify("y"))
+        self.assertEqual([r.label for r in results], ["a", "a"])
+        self.assertNotIn(loop_thread, call_threads)
 
 
 if __name__ == "__main__":

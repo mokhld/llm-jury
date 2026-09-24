@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
+import { LIBRARY_VERSION } from "../_version.ts";
 import { ThresholdCalibrator } from "../calibration/optimizer.ts";
 import { FunctionClassifier } from "../classifiers/functionAdapter.ts";
 import { HuggingFaceClassifier } from "../classifiers/huggingFaceAdapter.ts";
 import { LLMClassifier } from "../classifiers/llmClassifier.ts";
 import { DebateConfig, DebateMode } from "../debate/engine.ts";
 import { DEFAULT_MODEL } from "../defaults.ts";
+import type { Verdict } from "../judges/base.ts";
 import { BayesianJudge } from "../judges/bayesian.ts";
 import { LLMJudge } from "../judges/llmJudge.ts";
 import { MajorityVoteJudge } from "../judges/majorityVote.ts";
@@ -16,17 +19,132 @@ import { Jury } from "../jury/core.ts";
 import type { Persona } from "../personas/base.ts";
 import { PersonaRegistry } from "../personas/registry.ts";
 
-function parseArg(argv: string[], name: string): string | null {
-  const idx = argv.indexOf(name);
-  if (idx === -1 || idx + 1 >= argv.length) {
-    return null;
+/**
+ * Bad command-line usage: an unknown or malformed option, or input the command
+ * cannot use. `runCli` prints the message to stderr and exits with code 2, the
+ * same code the Python CLI uses for usage errors.
+ */
+export class CliUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliUsageError";
   }
-  return argv[idx + 1] ?? null;
 }
 
-function parseBoolFlag(argv: string[], name: string): boolean {
-  return argv.includes(name);
+// ---------------------------------------------------------------------------
+// Option parsing
+// ---------------------------------------------------------------------------
+
+const COMMANDS = ["classify", "calibrate"] as const;
+type Command = (typeof COMMANDS)[number];
+
+const COMMON_VALUE_OPTIONS = [
+  "--classifier",
+  "--personas",
+  "--labels",
+  "--judge",
+  "--judge-model",
+  "--persona-model",
+  "--debate-mode",
+  "--max-rounds",
+  "--max-debate-cost",
+  "--debate-concurrency",
+];
+const COMMON_FLAG_OPTIONS = ["--hide-primary-result", "--hide-confidence"];
+const COMMAND_VALUE_OPTIONS: Record<Command, string[]> = {
+  classify: ["--input", "--output", "--threshold", "--concurrency"],
+  calibrate: ["--input", "--initial-threshold", "--error-cost", "--escalation-cost"],
+};
+
+type ParsedOptions = {
+  values: Map<string, string>;
+  flags: Set<string>;
+};
+
+/**
+ * Parse `--name value`, `--name=value` and boolean flags for a command. Unknown
+ * options, stray arguments and options missing their value are usage errors.
+ */
+function parseOptions(command: Command, args: string[]): ParsedOptions {
+  const valueOptions = new Set([...COMMON_VALUE_OPTIONS, ...COMMAND_VALUE_OPTIONS[command]]);
+  const flagOptions = new Set(COMMON_FLAG_OPTIONS);
+  const values = new Map<string, string>();
+  const flags = new Set<string>();
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    const eq = arg.startsWith("--") ? arg.indexOf("=") : -1;
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+
+    if (flagOptions.has(name)) {
+      if (eq !== -1) {
+        throw new CliUsageError(`Option '${name}' does not take a value.`);
+      }
+      flags.add(name);
+      continue;
+    }
+    if (!valueOptions.has(name)) {
+      throw new CliUsageError(
+        arg.startsWith("-")
+          ? `No such option for '${command}': ${name}`
+          : `Got unexpected extra argument (${arg})`,
+      );
+    }
+
+    let value: string | undefined;
+    if (eq !== -1) {
+      value = arg.slice(eq + 1);
+    } else {
+      value = args[i + 1];
+      i += 1;
+    }
+    if (value === undefined) {
+      throw new CliUsageError(`Option '${name}' requires an argument.`);
+    }
+    values.set(name, value);
+  }
+
+  return { values, flags };
 }
+
+type NumberRule = { integer?: boolean; min?: number; max?: number; expected: string };
+
+const THRESHOLD_RULE: NumberRule = { min: 0, max: 1, expected: "a number between 0 and 1" };
+const COUNT_RULE: NumberRule = { integer: true, min: 1, expected: "an integer >= 1" };
+const COST_RULE: NumberRule = { min: 0, expected: "a finite number >= 0" };
+
+// Plain decimal notation only: `Number()` alone would also accept "", "0x10"
+// and "Infinity".
+const DECIMAL_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const INTEGER_PATTERN = /^[+-]?\d+$/;
+
+function parseNumber(name: string, raw: string, rule: NumberRule): number {
+  const text = raw.trim();
+  const pattern = rule.integer ? INTEGER_PATTERN : DECIMAL_PATTERN;
+  const value = pattern.test(text) ? Number(text) : Number.NaN;
+  if (
+    !Number.isFinite(value) ||
+    (rule.min !== undefined && value < rule.min) ||
+    (rule.max !== undefined && value > rule.max)
+  ) {
+    throw new CliUsageError(`Invalid value for '${name}': must be ${rule.expected}, got '${raw}'.`);
+  }
+  return value;
+}
+
+function numberOption(options: ParsedOptions, name: string, fallback: number, rule: NumberRule): number {
+  const raw = options.values.get(name);
+  return raw === undefined ? fallback : parseNumber(name, raw, rule);
+}
+
+function optionalNumberOption(options: ParsedOptions, name: string, rule: NumberRule): number | undefined {
+  const raw = options.values.get(name);
+  return raw === undefined ? undefined : parseNumber(name, raw, rule);
+}
+
+// ---------------------------------------------------------------------------
+// JSONL input and output
+// ---------------------------------------------------------------------------
 
 function readJsonl(path: string): Array<Record<string, unknown>> {
   const lines = readFileSync(path, "utf8")
@@ -37,23 +155,48 @@ function readJsonl(path: string): Array<Record<string, unknown>> {
 }
 
 function writeJsonl(path: string, rows: unknown[]): void {
-  writeFileSync(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n", "utf8");
+  writeFileSync(path, rows.map((row) => `${JSON.stringify(row)}\n`).join(""), "utf8");
 }
 
-function toSnakeCaseObject(value: unknown): unknown {
+// Keys whose values are data (classifier output, persona names) rather than
+// library fields. Their contents are copied without renaming inner keys.
+const DATA_KEYS = new Set(["rawOutput", "personaBiases"]);
+
+function snakeCaseKey(key: string): string {
+  if (!/^[a-z][A-Za-z0-9]*$/.test(key)) {
+    return key;
+  }
+  return key.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
+}
+
+/** Recursively rename camelCase identifier keys to snake_case. */
+export function toSnakeCaseObject(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => toSnakeCaseObject(item));
   }
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      const snake = key.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
-      out[snake] = toSnakeCaseObject(entry);
+      out[snakeCaseKey(key)] = DATA_KEYS.has(key) ? entry : toSnakeCaseObject(entry);
     }
     return out;
   }
   return value;
 }
+
+/**
+ * Output row for a verdict: the verdict's own JSON form (`toJSON`) with
+ * snake_case keys, the same shape as the Python CLI's `Verdict.to_dict()` rows.
+ * Optional fields that are unset are written as null.
+ */
+export function verdictToRow(verdict: Verdict): Record<string, unknown> {
+  const json = JSON.stringify(verdict, (_key, value: unknown) => (value === undefined ? null : value));
+  return toSnakeCaseObject(JSON.parse(json)) as Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Builders
+// ---------------------------------------------------------------------------
 
 export function parseLabels(raw: string | null, fallback: string[] = ["safe", "unsafe"]): string[] {
   if (!raw) {
@@ -66,12 +209,18 @@ export function parseLabels(raw: string | null, fallback: string[] = ["safe", "u
   return labels.length > 0 ? labels : fallback;
 }
 
+/** Labels passed with --labels, or null when the flag is absent or empty. */
+function explicitLabels(raw: string | null): string[] | null {
+  const labels = parseLabels(raw, []);
+  return labels.length > 0 ? labels : null;
+}
+
 export function resolveCalibrationLabels(rawLabels: string | null, expectedLabels: string[]): string[] {
   return parseLabels(rawLabels, Array.from(new Set(expectedLabels)));
 }
 
 function selectPersonas(name: string) {
-  switch (name.toLowerCase()) {
+  switch (name.trim().toLowerCase()) {
     case "content_moderation":
       return PersonaRegistry.contentModeration();
     case "legal_compliance":
@@ -81,7 +230,7 @@ function selectPersonas(name: string) {
     case "financial_compliance":
       return PersonaRegistry.financialCompliance();
     default:
-      throw new Error(`Unsupported personas set: ${name}`);
+      throw new CliUsageError(`Unsupported personas set: ${name}`);
   }
 }
 
@@ -93,7 +242,7 @@ function applyPersonaModel(personas: Persona[], model: string | null): Persona[]
 }
 
 function selectJudge(name: string, model: string | null) {
-  switch (name.toLowerCase()) {
+  switch (name.trim().toLowerCase()) {
     case "llm":
       return new LLMJudge({ model: model ?? DEFAULT_MODEL });
     case "majority":
@@ -103,50 +252,127 @@ function selectJudge(name: string, model: string | null) {
     case "bayesian":
       return new BayesianJudge();
     default:
-      throw new Error(`Unsupported judge strategy: ${name}`);
+      throw new CliUsageError(`Unsupported judge strategy: ${name}`);
   }
 }
 
-function buildDebateConfig(argv: string[]): DebateConfig {
-  const rawMode = parseArg(argv, "--debate-mode") ?? DebateMode.INDEPENDENT;
-  const modeValues = Object.values(DebateMode);
-  if (!modeValues.includes(rawMode as (typeof modeValues)[number])) {
-    throw new Error(`Unsupported debate mode: ${rawMode}`);
+function buildDebateConfig(options: ParsedOptions): DebateConfig {
+  const rawMode = options.values.get("--debate-mode") ?? DebateMode.INDEPENDENT;
+  const mode = rawMode.trim().toLowerCase();
+  const modeValues: string[] = Object.values(DebateMode);
+  if (!modeValues.includes(mode)) {
+    throw new CliUsageError(
+      `Invalid value for '--debate-mode': unsupported debate mode '${rawMode}'. ` +
+        `Use one of: ${modeValues.join(", ")}.`,
+    );
   }
 
-  const maxRounds = Number(parseArg(argv, "--max-rounds") ?? "1");
   return new DebateConfig({
-    mode: rawMode as (typeof modeValues)[number],
-    maxRounds,
-    includePrimaryResult: !parseBoolFlag(argv, "--hide-primary-result"),
-    includeConfidence: !parseBoolFlag(argv, "--hide-confidence"),
+    mode: mode as DebateMode,
+    maxRounds: numberOption(options, "--max-rounds", 1, COUNT_RULE),
+    includePrimaryResult: !options.flags.has("--hide-primary-result"),
+    includeConfidence: !options.flags.has("--hide-confidence"),
   });
 }
 
-function buildClassifier(
+/** A stored prediction confidence in [0, 1], or null if it is missing or invalid. */
+function predictionConfidence(value: unknown): number | null {
+  let number: number;
+  if (typeof value === "number") {
+    number = value;
+  } else if (typeof value === "string" && DECIMAL_PATTERN.test(value.trim())) {
+    number = Number(value.trim());
+  } else {
+    return null;
+  }
+  return Number.isFinite(number) && number >= 0 && number <= 1 ? number : null;
+}
+
+function formatRowNumbers(rowNumbers: number[], limit = 5): string {
+  const shown = rowNumbers.slice(0, limit).join(", ");
+  return rowNumbers.length > limit ? `${shown} (and ${rowNumbers.length - limit} more)` : shown;
+}
+
+/**
+ * Map each row's text to its stored `[predicted_label, predicted_confidence]`.
+ * The `function` classifier replays predictions stored in the input file. It
+ * never reads the ground-truth `label` field, so calibration cannot score the
+ * ground truth against itself. Rows are numbered from 1 in error messages.
+ */
+function functionPredictions(rows: Array<Record<string, unknown>>): Map<string, [string, number]> {
+  const predictions = new Map<string, [string, number]>();
+  const invalidRows: number[] = [];
+  const conflictingRows: number[] = [];
+
+  rows.forEach((row, idx) => {
+    const rowNumber = idx + 1;
+    const label = row.predicted_label;
+    const confidence = predictionConfidence(row.predicted_confidence);
+    if (row.text == null || label == null || String(label).trim() === "" || confidence === null) {
+      invalidRows.push(rowNumber);
+      return;
+    }
+    const key = String(row.text);
+    const prediction: [string, number] = [String(label), confidence];
+    const existing = predictions.get(key);
+    if (!existing) {
+      predictions.set(key, prediction);
+    } else if (existing[0] !== prediction[0] || existing[1] !== prediction[1]) {
+      conflictingRows.push(rowNumber);
+    }
+  });
+
+  if (invalidRows.length > 0) {
+    throw new CliUsageError(
+      "The 'function' classifier replays predictions stored in the input, so every row needs " +
+        "'text', 'predicted_label' and 'predicted_confidence' (a number between 0 and 1). " +
+        "The ground-truth 'label' field is never used as a prediction. Missing or invalid in " +
+        `${invalidRows.length} row(s): ${formatRowNumbers(invalidRows)}.`,
+    );
+  }
+  if (conflictingRows.length > 0) {
+    throw new CliUsageError(
+      "The 'function' classifier looks up predictions by text, but " +
+        `${conflictingRows.length} row(s) repeat an earlier text with a different prediction: ` +
+        `${formatRowNumbers(conflictingRows)}.`,
+    );
+  }
+  return predictions;
+}
+
+/**
+ * Build the primary classifier for a spec. `labels` is the label set for the
+ * run. `labelsFlag` is what the user passed with --labels (null when absent);
+ * the `huggingface:` spec uses it and otherwise takes label names from the
+ * model's scores.
+ */
+export function buildClassifier(
   classifierSpec: string,
   labels: string[],
   rows: Array<Record<string, unknown>>,
+  labelsFlag: string[] | null = null,
 ): { classifier: FunctionClassifier | LLMClassifier | HuggingFaceClassifier; isMockClassifier: boolean } {
-  if (classifierSpec === "function") {
-    const predictionMap = new Map<string, [string, number]>();
-    rows.forEach((row, idx) => {
-      const text = String(row.text ?? `row-${idx}`);
-      const predictedLabel = String(row.predicted_label ?? row.label ?? labels[0] ?? "unknown");
-      const predictedConfidence = Number(row.predicted_confidence ?? 0.95);
-      predictionMap.set(text, [predictedLabel, predictedConfidence]);
-    });
+  const spec = classifierSpec.trim();
 
+  if (spec === "function") {
+    const predictions = functionPredictions(rows);
+    const lookup = (text: string): [string, number] => {
+      const prediction = predictions.get(text);
+      if (!prediction) {
+        throw new Error(`No stored prediction for text: ${text}`);
+      }
+      return prediction;
+    };
     return {
-      classifier: new FunctionClassifier((text) => predictionMap.get(text) ?? [labels[0] ?? "unknown", 0.95], labels),
+      classifier: new FunctionClassifier(lookup, labels),
       isMockClassifier: true,
     };
   }
 
-  if (classifierSpec.startsWith("llm:")) {
-    const model = classifierSpec.slice("llm:".length).trim();
+  if (spec.startsWith("llm:")) {
+    const model = spec.slice("llm:".length).trim();
     if (!model) {
-      throw new Error("classifier spec 'llm:' requires a model name");
+      throw new CliUsageError("classifier spec 'llm:' requires a model name");
     }
     return {
       classifier: new LLMClassifier({ model, labels }),
@@ -154,18 +380,18 @@ function buildClassifier(
     };
   }
 
-  if (classifierSpec.startsWith("huggingface:")) {
-    const modelName = classifierSpec.slice("huggingface:".length).trim();
+  if (spec.startsWith("huggingface:")) {
+    const modelName = spec.slice("huggingface:".length).trim();
     if (!modelName) {
-      throw new Error("classifier spec 'huggingface:' requires a model name");
+      throw new CliUsageError("classifier spec 'huggingface:' requires a model name");
     }
     return {
-      classifier: new HuggingFaceClassifier({ modelName }),
+      classifier: new HuggingFaceClassifier({ modelName, labels: labelsFlag ?? undefined }),
       isMockClassifier: false,
     };
   }
 
-  throw new Error("Unsupported classifier spec. Use: function, llm:<model>, huggingface:<model>");
+  throw new CliUsageError("Unsupported classifier spec. Use one of: function, llm:<model>, huggingface:<model>");
 }
 
 function usageText(): string {
@@ -176,12 +402,35 @@ function usageText(): string {
     "  classify   Classify JSONL inputs and write verdicts JSONL",
     "  calibrate  Calibrate threshold from labeled JSONL",
     "",
+    "classify options:",
+    "  --input <path>             Input JSONL file (required)",
+    "  --output <path>            Output JSONL file (required)",
+    "  --threshold <0-1>          Confidence threshold for escalation (default 0.7)",
+    "  --concurrency <n>          Batch concurrency (default 10)",
+    "",
+    "calibrate options:",
+    "  --input <path>             Input JSONL file with a ground-truth 'label' field (required)",
+    "  --initial-threshold <0-1>  Starting threshold (default 0.7)",
+    "  --error-cost <usd>         Cost per classification error (default 10)",
+    "  --escalation-cost <usd>    Cost per escalation (default 0.05)",
+    "",
     "Common options:",
-    "  --classifier function|llm:<model>|huggingface:<model>",
+    "  --classifier function|llm:<model>|huggingface:<model>  (default function)",
     "  --personas content_moderation|legal_compliance|medical_triage|financial_compliance",
-    "  --judge llm|majority|weighted|bayesian",
     "  --labels safe,unsafe",
-    "  --debate-mode independent|sequential|deliberation|adversarial",
+    "  --judge llm|majority|weighted|bayesian  (default llm)",
+    "  --judge-model <model>",
+    "  --persona-model <model>",
+    "  --debate-mode independent|sequential|deliberation|adversarial  (default independent)",
+    "  --max-rounds <n>           Max deliberation rounds (default 1)",
+    "  --max-debate-cost <usd>    Max debate cost per item",
+    "  --debate-concurrency <n>   Persona calls in flight per debate (default 5)",
+    "  --hide-primary-result      Hide the primary result from personas",
+    "  --hide-confidence          Hide the primary confidence from personas",
+    "  --help, --version",
+    "",
+    "The 'function' classifier replays predictions stored in the input: every row needs",
+    "'text', 'predicted_label' and 'predicted_confidence'.",
     "",
     "Examples:",
     "  llm-jury classify --input input.jsonl --output verdicts.jsonl --classifier function --judge majority",
@@ -189,6 +438,10 @@ function usageText(): string {
   ].join("\n");
 }
 
+/**
+ * Run a CLI command. Returns the exit code for completed runs and throws
+ * `CliUsageError` for bad usage (`runCli` turns that into exit code 2).
+ */
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${usageText()}\n`);
@@ -196,37 +449,41 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (argv.includes("--version") || argv.includes("-v")) {
-    process.stdout.write("0.1.0\n");
+    process.stdout.write(`${LIBRARY_VERSION}\n`);
     return 0;
   }
 
-  const command = argv[0];
-  const classifierSpec = parseArg(argv, "--classifier") ?? "function";
-  const personasKey = parseArg(argv, "--personas") ?? "content_moderation";
-  const judgeKey = parseArg(argv, "--judge") ?? "llm";
-  const judgeModel = parseArg(argv, "--judge-model") ?? DEFAULT_MODEL;
-  const personaModel = parseArg(argv, "--persona-model") ?? DEFAULT_MODEL;
-  const rawLabels = parseArg(argv, "--labels");
+  const command = argv[0]!;
+  if (!(COMMANDS as readonly string[]).includes(command)) {
+    throw new CliUsageError("Supported commands: classify, calibrate");
+  }
+  const options = parseOptions(command as Command, argv.slice(1));
+  const option = (name: string): string | null => options.values.get(name) ?? null;
+
+  const classifierSpec = option("--classifier") ?? "function";
+  const personasKey = option("--personas") ?? "content_moderation";
+  const judgeKey = option("--judge") ?? "llm";
+  const judgeModel = option("--judge-model") ?? DEFAULT_MODEL;
+  const personaModel = option("--persona-model");
+  const rawLabels = option("--labels");
   const labels = parseLabels(rawLabels, ["safe", "unsafe"]);
-  const debateConfig = buildDebateConfig(argv);
-  const debateConcurrency = Number(parseArg(argv, "--debate-concurrency") ?? "5");
-  const maxDebateCostRaw = parseArg(argv, "--max-debate-cost");
-  const maxDebateCostUsd = maxDebateCostRaw == null ? undefined : Number(maxDebateCostRaw);
+  const labelsFlag = explicitLabels(rawLabels);
+  const debateConfig = buildDebateConfig(options);
+  const debateConcurrency = numberOption(options, "--debate-concurrency", 5, COUNT_RULE);
+  const maxDebateCostUsd = optionalNumberOption(options, "--max-debate-cost", COST_RULE);
 
   if (command === "classify") {
-    const input = parseArg(argv, "--input");
-    const output = parseArg(argv, "--output");
-    const thresholdValue = parseArg(argv, "--threshold");
-    const concurrency = Number(parseArg(argv, "--concurrency") ?? "10");
-
+    const input = option("--input");
+    const output = option("--output");
     if (!input || !output) {
-      throw new Error("--input and --output are required");
+      throw new CliUsageError("--input and --output are required");
     }
+    const threshold = numberOption(options, "--threshold", 0.7, THRESHOLD_RULE);
+    const concurrency = numberOption(options, "--concurrency", 10, COUNT_RULE);
 
-    const threshold = thresholdValue ? Number(thresholdValue) : 0.7;
     const rows = readJsonl(input);
     const texts = rows.map((row, idx) => String(row.text ?? `row-${idx}`));
-    const { classifier, isMockClassifier } = buildClassifier(classifierSpec, labels, rows);
+    const { classifier, isMockClassifier } = buildClassifier(classifierSpec, labels, rows, labelsFlag);
 
     const jury = new Jury({
       classifier,
@@ -245,9 +502,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         failures += 1;
         return { text: texts[idx], error: `${result.name}: ${result.message}` };
       }
-      return toSnakeCaseObject(result);
+      return verdictToRow(result);
     });
     writeJsonl(output, outputRows);
+    process.stdout.write(`Wrote ${outputRows.length} verdict(s) to ${output}\n`);
     if (failures > 0) {
       process.stderr.write(
         `Warning: ${failures} of ${outputRows.length} row(s) failed; ` +
@@ -260,67 +518,92 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
 
-  if (command === "calibrate") {
-    const input = parseArg(argv, "--input");
-    const errorCost = Number(parseArg(argv, "--error-cost") ?? "10");
-    const escalationCost = Number(parseArg(argv, "--escalation-cost") ?? "0.05");
-    const initialThreshold = Number(parseArg(argv, "--initial-threshold") ?? "0.7");
+  // calibrate
+  const input = option("--input");
+  if (!input) {
+    throw new CliUsageError("--input is required");
+  }
+  const errorCost = numberOption(options, "--error-cost", 10, COST_RULE);
+  const escalationCost = numberOption(options, "--escalation-cost", 0.05, COST_RULE);
+  const initialThreshold = numberOption(options, "--initial-threshold", 0.7, THRESHOLD_RULE);
 
-    if (!input) {
-      throw new Error("--input is required");
-    }
-
-    const rows = readJsonl(input);
-    if (rows.length === 0) {
-      throw new Error("input jsonl is empty");
-    }
-
-    const missingLabels = rows.filter((row) => row.label == null).length;
-    if (missingLabels > 0) {
-      throw new Error(
-        `Calibration input requires a ground-truth 'label' field on every row. Missing labels in ${missingLabels} row(s).`,
-      );
-    }
-
-    const texts = rows.map((row, idx) => String(row.text ?? `row-${idx}`));
-    const expectedLabels = rows.map((row) => String(row.label));
-    const inferenceLabels = resolveCalibrationLabels(rawLabels, expectedLabels);
-    const { classifier } = buildClassifier(classifierSpec, inferenceLabels, rows);
-
-    const jury = new Jury({
-      classifier,
-      personas: applyPersonaModel(selectPersonas(personasKey), personaModel),
-      confidenceThreshold: initialThreshold,
-      judge: selectJudge(judgeKey, judgeModel),
-      debateConfig,
-      debateConcurrency,
-      maxDebateCostUsd,
-    });
-
-    const calibrator = new ThresholdCalibrator(jury);
-    const bestThreshold = await calibrator.calibrate({
-      texts,
-      labels: expectedLabels,
-      errorCost,
-      escalationCost,
-    });
-    const report = calibrator.calibrationReport();
-    report.bestThreshold = bestThreshold;
-    process.stdout.write(`${JSON.stringify(toSnakeCaseObject(report))}\n`);
-    return 0;
+  const rows = readJsonl(input);
+  if (rows.length === 0) {
+    throw new CliUsageError("Input JSONL is empty.");
   }
 
-  throw new Error("Supported commands: classify, calibrate");
+  const missingLabels = rows.filter((row) => row.label == null).length;
+  if (missingLabels > 0) {
+    throw new CliUsageError(
+      `Calibration input requires a ground-truth 'label' field on every row. Missing labels in ${missingLabels} row(s).`,
+    );
+  }
+
+  const texts = rows.map((row, idx) => String(row.text ?? `row-${idx}`));
+  const expectedLabels = rows.map((row) => String(row.label));
+  const inferenceLabels = resolveCalibrationLabels(rawLabels, expectedLabels);
+  const { classifier } = buildClassifier(classifierSpec, inferenceLabels, rows, labelsFlag);
+
+  const jury = new Jury({
+    classifier,
+    personas: applyPersonaModel(selectPersonas(personasKey), personaModel),
+    confidenceThreshold: initialThreshold,
+    judge: selectJudge(judgeKey, judgeModel),
+    debateConfig,
+    debateConcurrency,
+    maxDebateCostUsd,
+  });
+
+  const calibrator = new ThresholdCalibrator(jury);
+  const bestThreshold = await calibrator.calibrate({
+    texts,
+    labels: expectedLabels,
+    errorCost,
+    escalationCost,
+  });
+  const report = calibrator.calibrationReport();
+  report.bestThreshold = bestThreshold;
+  process.stdout.write(`${JSON.stringify(toSnakeCaseObject(report))}\n`);
+  return 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().then(
-    (code) => {
-      process.exitCode = code;
-    },
-    (err) => {
-      console.error(err);
-      process.exitCode = 1;
-    },
-  );
+/**
+ * CLI entry point: runs `main` and maps failures to exit codes. Usage errors
+ * print `Error: <message>` to stderr and return 2; unexpected errors print the
+ * error and return 1.
+ */
+export async function runCli(argv: string[] = process.argv.slice(2)): Promise<number> {
+  try {
+    return await main(argv);
+  } catch (err) {
+    if (err instanceof CliUsageError) {
+      process.stderr.write(`Error: ${err.message}\nTry 'llm-jury --help' for help.\n`);
+      return 2;
+    }
+    console.error(err);
+    return 1;
+  }
+}
+
+/**
+ * True when this file is the script node was started with, e.g.
+ * `node dist/cli/main.js`. Both sides are resolved with realpath so symlinks,
+ * relative paths and paths with spaces compare equal.
+ */
+function isEntryPoint(): boolean {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
+  void runCli().then((code) => {
+    process.exitCode = code;
+  });
 }

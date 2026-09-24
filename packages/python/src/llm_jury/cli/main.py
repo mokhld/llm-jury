@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from pathlib import Path
 
 import typer
@@ -15,6 +16,7 @@ from llm_jury.judges.weighted_vote import WeightedVoteJudge
 from llm_jury.jury.core import Jury
 from llm_jury.personas.base import Persona
 from llm_jury.personas.registry import PersonaRegistry
+from llm_jury.utils import json_serializable
 
 app = typer.Typer(
     name="llm-jury",
@@ -39,13 +41,65 @@ def _load_jsonl(path: Path) -> list[dict]:
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+            fh.write(
+                json.dumps(row, default=json_serializable, ensure_ascii=True) + "\n"
+            )
 
 
 def _parse_labels(raw: str | None, fallback: list[str] | None = None) -> list[str]:
-    if raw:
-        return [label.strip() for label in raw.split(",") if label.strip()]
+    parsed = _explicit_labels(raw)
+    if parsed:
+        return parsed
     return fallback or ["safe", "unsafe"]
+
+
+def _explicit_labels(raw: str | None) -> list[str] | None:
+    """Labels passed with --labels, or None when the flag is absent or empty."""
+    if not raw:
+        return None
+    parsed = [label.strip() for label in raw.split(",") if label.strip()]
+    return parsed or None
+
+
+# ---------------------------------------------------------------------------
+# Option validation
+# ---------------------------------------------------------------------------
+
+
+def _check_unit_interval(value: float) -> float:
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise typer.BadParameter(f"must be a number between 0 and 1, got {value}.")
+    return value
+
+
+def _check_positive_int(value: int) -> int:
+    if value < 1:
+        raise typer.BadParameter(f"must be an integer >= 1, got {value}.")
+    return value
+
+
+def _check_non_negative(value: float | None) -> float | None:
+    if value is not None and (not math.isfinite(value) or value < 0):
+        raise typer.BadParameter(f"must be a finite number >= 0, got {value}.")
+    return value
+
+
+def _check_debate_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    valid = [mode.value for mode in DebateMode]
+    if normalized not in valid:
+        raise typer.BadParameter(
+            f"unsupported debate mode {value!r}. Use one of: {', '.join(valid)}.",
+            param_hint="'--debate-mode'",
+        )
+    return normalized
+
+
+def _format_row_numbers(row_numbers: list[int], limit: int = 5) -> str:
+    shown = ", ".join(str(n) for n in row_numbers[:limit])
+    if len(row_numbers) > limit:
+        shown += f" (and {len(row_numbers) - limit} more)"
+    return shown
 
 
 def _apply_persona_model(personas: list[Persona], model: str | None) -> list[Persona]:
@@ -95,20 +149,90 @@ def _select_judge(name: str, model: str | None = None):
     raise typer.BadParameter(f"Unsupported judge strategy: {name}")
 
 
-def _build_classifier(classifier_spec: str, labels: list[str], rows: list[dict]):
+def _prediction_confidence(value: object) -> float | None:
+    """A stored prediction confidence as a float in [0, 1], or None if invalid."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if not math.isfinite(number) or not 0.0 <= number <= 1.0:
+        return None
+    return number
+
+
+def _function_predictions(rows: list[dict]) -> dict[str, tuple[str, float]]:
+    """Map each row's text to its stored ``(predicted_label, predicted_confidence)``.
+
+    The ``function`` classifier replays predictions stored in the input file. It
+    never reads the ground-truth ``label`` field, so calibration cannot score the
+    ground truth against itself. Rows are numbered from 1 in error messages.
+    """
+    predictions: dict[str, tuple[str, float]] = {}
+    invalid_rows: list[int] = []
+    conflicting_rows: list[int] = []
+    for row_number, row in enumerate(rows, start=1):
+        text = row.get("text")
+        label = row.get("predicted_label")
+        confidence = _prediction_confidence(row.get("predicted_confidence"))
+        if (
+            text is None
+            or label is None
+            or not str(label).strip()
+            or confidence is None
+        ):
+            invalid_rows.append(row_number)
+            continue
+        key = str(text)
+        prediction = (str(label), confidence)
+        existing = predictions.setdefault(key, prediction)
+        if existing != prediction:
+            conflicting_rows.append(row_number)
+
+    if invalid_rows:
+        raise typer.BadParameter(
+            "The 'function' classifier replays predictions stored in the input, so "
+            "every row needs 'text', 'predicted_label' and 'predicted_confidence' "
+            "(a number between 0 and 1). The ground-truth 'label' field is never "
+            "used as a prediction. Missing or invalid in "
+            f"{len(invalid_rows)} row(s): {_format_row_numbers(invalid_rows)}.",
+            param_hint="'--classifier function'",
+        )
+    if conflicting_rows:
+        raise typer.BadParameter(
+            "The 'function' classifier looks up predictions by text, but "
+            f"{len(conflicting_rows)} row(s) repeat an earlier text with a different "
+            f"prediction: {_format_row_numbers(conflicting_rows)}.",
+            param_hint="'--classifier function'",
+        )
+    return predictions
+
+
+def _build_classifier(
+    classifier_spec: str,
+    labels: list[str],
+    rows: list[dict],
+    *,
+    explicit_labels: list[str] | None = None,
+):
+    """Build the primary classifier for a spec.
+
+    ``labels`` is the label set for the run. ``explicit_labels`` is what the user
+    passed with --labels (None when absent); the ``huggingface:`` spec uses it and
+    otherwise takes label names from the model's scores.
+    """
     spec = classifier_spec.strip()
 
     if spec == "function":
-        prediction_map: dict[str, tuple[str, float]] = {}
-        for idx, row in enumerate(rows):
-            text = str(row.get("text", f"row-{idx}"))
-            pred_label = str(row.get("predicted_label", row.get("label", labels[0])))
-            pred_conf = float(row.get("predicted_confidence", 0.95))
-            prediction_map[text] = (pred_label, pred_conf)
-
-        default_result = (labels[0], 0.95)
+        predictions = _function_predictions(rows)
         classifier = FunctionClassifier(
-            fn=lambda text, _pm=prediction_map, _d=default_result: _pm.get(text, _d),
+            fn=lambda text, _pm=predictions: _pm[text],
             labels=labels,
         )
         return classifier, True
@@ -129,7 +253,10 @@ def _build_classifier(classifier_spec: str, labels: list[str], rows: list[dict])
             raise typer.BadParameter(
                 "classifier spec 'huggingface:' requires a model name"
             )
-        return HuggingFaceClassifier(model_name=model_name), False
+        return (
+            HuggingFaceClassifier(model_name=model_name, labels=explicit_labels),
+            False,
+        )
 
     raise typer.BadParameter(
         "Unsupported classifier spec. Use one of: function, llm:<model>, huggingface:<model>"
@@ -143,7 +270,7 @@ def _build_debate_config(
     hide_confidence: bool,
 ) -> DebateConfig:
     return DebateConfig(
-        mode=DebateMode(debate_mode),
+        mode=DebateMode(_check_debate_mode(debate_mode)),
         max_rounds=max_rounds,
         include_primary_result=not hide_primary_result,
         include_confidence=not hide_confidence,
@@ -171,12 +298,28 @@ def classify(
     persona_model: str | None = typer.Option(
         None, help="Override model for all personas"
     ),
-    threshold: float = typer.Option(0.7, help="Confidence threshold for escalation"),
-    concurrency: int = typer.Option(10, help="Batch concurrency"),
-    debate_mode: str = typer.Option("independent", help="Debate mode"),
-    max_rounds: int = typer.Option(1, help="Max deliberation rounds"),
-    max_debate_cost: float | None = typer.Option(None, help="Max debate cost in USD"),
-    debate_concurrency: int = typer.Option(5, help="Debate persona concurrency"),
+    threshold: float = typer.Option(
+        0.7,
+        help="Confidence threshold for escalation (0 to 1)",
+        callback=_check_unit_interval,
+    ),
+    concurrency: int = typer.Option(
+        10, help="Batch concurrency", callback=_check_positive_int
+    ),
+    debate_mode: str = typer.Option(
+        "independent",
+        help="Debate mode: independent, sequential, deliberation, adversarial",
+        callback=_check_debate_mode,
+    ),
+    max_rounds: int = typer.Option(
+        1, help="Max deliberation rounds", callback=_check_positive_int
+    ),
+    max_debate_cost: float | None = typer.Option(
+        None, help="Max debate cost in USD", callback=_check_non_negative
+    ),
+    debate_concurrency: int = typer.Option(
+        5, help="Debate persona concurrency", callback=_check_positive_int
+    ),
     hide_primary_result: bool = typer.Option(
         False, help="Hide primary result from personas"
     ),
@@ -186,7 +329,12 @@ def classify(
     input_rows = _load_jsonl(input)
     texts = [str(row.get("text", "")) for row in input_rows]
     parsed_labels = _parse_labels(labels, fallback=["safe", "unsafe"])
-    clf, is_mock = _build_classifier(classifier, parsed_labels, input_rows)
+    clf, is_mock = _build_classifier(
+        classifier,
+        parsed_labels,
+        input_rows,
+        explicit_labels=_explicit_labels(labels),
+    )
 
     jury_instance = Jury(
         classifier=clf,
@@ -241,13 +389,29 @@ def calibrate(
     persona_model: str | None = typer.Option(
         None, help="Override model for all personas"
     ),
-    initial_threshold: float = typer.Option(0.7, help="Starting threshold"),
-    error_cost: float = typer.Option(10.0, help="Cost per classification error"),
-    escalation_cost: float = typer.Option(0.05, help="Cost per escalation"),
-    debate_mode: str = typer.Option("independent", help="Debate mode"),
-    max_rounds: int = typer.Option(1, help="Max deliberation rounds"),
-    max_debate_cost: float | None = typer.Option(None, help="Max debate cost in USD"),
-    debate_concurrency: int = typer.Option(5, help="Debate persona concurrency"),
+    initial_threshold: float = typer.Option(
+        0.7, help="Starting threshold (0 to 1)", callback=_check_unit_interval
+    ),
+    error_cost: float = typer.Option(
+        10.0, help="Cost per classification error", callback=_check_non_negative
+    ),
+    escalation_cost: float = typer.Option(
+        0.05, help="Cost per escalation", callback=_check_non_negative
+    ),
+    debate_mode: str = typer.Option(
+        "independent",
+        help="Debate mode: independent, sequential, deliberation, adversarial",
+        callback=_check_debate_mode,
+    ),
+    max_rounds: int = typer.Option(
+        1, help="Max deliberation rounds", callback=_check_positive_int
+    ),
+    max_debate_cost: float | None = typer.Option(
+        None, help="Max debate cost in USD", callback=_check_non_negative
+    ),
+    debate_concurrency: int = typer.Option(
+        5, help="Debate persona concurrency", callback=_check_positive_int
+    ),
     hide_primary_result: bool = typer.Option(
         False, help="Hide primary result from personas"
     ),
@@ -268,7 +432,9 @@ def calibrate(
     texts = [str(row.get("text", f"row-{idx}")) for idx, row in enumerate(rows)]
     labels_true = [str(row["label"]) for row in rows]
     parsed_labels = _parse_labels(labels, fallback=sorted(set(labels_true)))
-    clf, _ = _build_classifier(classifier, parsed_labels, rows)
+    clf, _ = _build_classifier(
+        classifier, parsed_labels, rows, explicit_labels=_explicit_labels(labels)
+    )
 
     jury_instance = Jury(
         classifier=clf,

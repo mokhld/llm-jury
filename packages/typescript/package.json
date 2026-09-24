@@ -32,7 +32,7 @@
     }
   },
   "bin": {
-    "llm-jury": "./dist/cli/main.js"
+    "llm-jury": "./dist/cli/bin.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
