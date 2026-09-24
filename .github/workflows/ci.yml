@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
 
+# The root package-lock.json covers the packages/typescript workspace, so
+# every Node job runs `npm ci` at the repository root.
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -26,8 +29,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install TS deps
-        working-directory: packages/typescript
-        run: npm install
+        run: npm ci
       - name: eslint
         working-directory: packages/typescript
         run: npm run lint
@@ -53,18 +55,85 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: ["22"]
+        # The tests run the TypeScript sources with --experimental-strip-types,
+        # which needs Node 22.6+. The built package is checked on Node 20 by
+        # the npm-package job.
+        node-version: ["22", "24"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
       - name: Install dependencies
-        working-directory: packages/typescript
-        run: npm install
+        run: npm ci
       - name: Type-check (tsc)
         working-directory: packages/typescript
         run: npm run check
       - name: Run tests
         working-directory: packages/typescript
         run: npm test
+
+  # Builds the sdist and wheel, installs the wheel into a fresh venv and runs
+  # the installed CLI, so packaging mistakes fail here instead of on PyPI.
+  python-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build sdist and wheel
+        working-directory: packages/python
+        run: |
+          python -m pip install --upgrade build
+          python -m build --outdir "$RUNNER_TEMP/dist"
+      - name: Check LICENSE is in the wheel and sdist
+        run: |
+          python -m zipfile -l "$RUNNER_TEMP"/dist/*.whl | grep "dist-info/licenses/LICENSE"
+          tar -tzf "$RUNNER_TEMP"/dist/*.tar.gz | grep "/LICENSE$"
+      - name: Install the wheel into a fresh venv and run it
+        run: |
+          expected=$(python -c "import tomllib; print(tomllib.load(open('packages/python/pyproject.toml', 'rb'))['project']['version'])")
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install "$RUNNER_TEMP"/dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/llm-jury" --help
+          actual=$("$RUNNER_TEMP/venv/bin/python" -c "import llm_jury; from llm_jury import Jury, PersonaRegistry; print(llm_jury.__version__)")
+          echo "installed llm_jury $actual, pyproject.toml says $expected"
+          test "$actual" = "$expected"
+
+  # Packs the npm tarball, installs it into an empty project and runs the
+  # installed bin (through npm's symlink, the way users run it).
+  npm-package:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # package.json declares engines.node ">=20".
+        node-version: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          # require() of an ES module needs Node 20.19+ / 22.12+.
+          check-latest: true
+      - name: Install dependencies
+        run: npm ci
+      - name: Pack the tarball
+        working-directory: packages/typescript
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Check LICENSE is in the tarball
+        run: tar -tzf "$RUNNER_TEMP"/llm-jury-core-*.tgz | grep "^package/LICENSE$"
+      - name: Install the tarball into a temp project and run it
+        run: |
+          expected=$(node -p "require('./packages/typescript/package.json').version")
+          mkdir "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke"
+          npm init -y > /dev/null
+          npm install "$RUNNER_TEMP"/llm-jury-core-*.tgz
+          npx --no-install llm-jury --help
+          actual=$(npx --no-install llm-jury --version)
+          echo "llm-jury --version printed $actual, package.json says $expected"
+          test "$actual" = "$expected"
+          node --input-type=module -e "import { Jury } from '@llm-jury/core'; if (typeof Jury !== 'function') process.exit(1);"
+          node -e "if (typeof require('@llm-jury/core').Jury !== 'function') process.exit(1);"

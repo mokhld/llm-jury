@@ -12,14 +12,15 @@ land in both.
 git clone https://github.com/mokhld/llm-jury.git
 cd llm-jury
 
-# Python
+# Python (dev tools such as pytest are the "dev" extra)
 cd packages/python
-uv sync           # or: pip install -e ".[dev]"
+uv sync --extra dev   # or: pip install -e ".[dev]"
 uv run python -m pytest -q
 
-# TypeScript
-cd ../typescript
-npm install
+# TypeScript (the root package-lock.json covers the workspace)
+cd ../..
+npm ci
+cd packages/typescript
 npm run check     # tsc + examples type-check
 npm test
 ```
@@ -27,12 +28,13 @@ npm test
 ## Project layout
 
 ```
-packages/python/        — llm-jury-classifier (source of truth)
-packages/typescript/    — @llm-jury/core (parity port)
-examples/python/        — runnable Python examples
-examples/typescript/    — runnable TS examples (type-checked in CI)
-AUDIT.md                — open issues, prioritised roadmap, what landed
-CHANGELOG.md            — user-facing change log
+packages/python/        llm-jury-classifier (source of truth)
+packages/typescript/    @llm-jury/core (parity port)
+examples/*.py           runnable Python examples
+examples/typescript/    runnable TS examples (type-checked in CI)
+docs/REVIEW.md          known problems and their status
+docs/FEATURES.md        feature backlog with implementation briefs
+CHANGELOG.md            user-facing change log
 ```
 
 The Python package is the source of truth. When changing behaviour,
@@ -42,17 +44,19 @@ PR unless the change is genuinely SDK-specific.
 ## Running tests
 
 ```bash
-# Python — 100+ tests, runs in <1s
+# Python: 280+ tests, about 1 s
 cd packages/python && uv run python -m pytest -q
 
-# TypeScript — 80+ tests under node:test
+# TypeScript: 230+ tests under node:test
 cd packages/typescript && npm test
 
 # TypeScript type-check + examples gate (CI runs this)
 cd packages/typescript && npm run check
 ```
 
-CI runs both suites on every PR across Python 3.10–3.13 + Node 22.
+CI runs both suites on every PR across Python 3.10 to 3.13 and Node 22 and 24. It also builds the
+wheel and the npm tarball, installs each into a clean environment and runs the installed
+`llm-jury` command (the tarball on Node 20 and 22).
 
 ## Linting
 
@@ -110,14 +114,14 @@ See `git log --oneline main` for examples.
 
 ## What to work on
 
-`AUDIT.md` is the source of truth for what's open. Section 9 lists
-the prioritised roadmap. Test-coverage gaps (T-rows in §7) are good
-first contributions — small, mechanical, each one pins a real branch
-in the code.
+[`docs/REVIEW.md`](docs/REVIEW.md) is the source of truth for known
+problems and their status. [`docs/FEATURES.md`](docs/FEATURES.md) ranks
+the feature backlog and has a brief for each item that is detailed
+enough to implement from.
 
-Larger feature work (P3 stretch items in §9: streaming, replay,
-webhooks, OTel, audit-log export, prompt-injection detection) is open
-for discussion but please open an issue first.
+Larger feature work (streaming, observability hooks, review routing,
+prompt-injection detection) is open for discussion, but please open an
+issue first.
 
 ## Reporting bugs
 

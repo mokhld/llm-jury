@@ -3,6 +3,6 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/mokhld/llm-jury/security/advisories/new
     about: Report a security issue privately. Do not file a public issue.
-  - name: Question or discussion
-    url: https://github.com/mokhld/llm-jury/discussions
-    about: For usage questions and open-ended discussion, use Discussions.
+  - name: Question
+    url: https://github.com/mokhld/llm-jury/issues?q=is%3Aissue
+    about: Search existing issues first. If nothing matches, open a bug report or feature request.

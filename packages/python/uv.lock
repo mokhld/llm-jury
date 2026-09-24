@@ -910,7 +910,7 @@ wheels = [
 
 [[package]]
 name = "llm-jury-classifier"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "litellm" },
@@ -944,7 +944,7 @@ sklearn = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=26.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "litellm", specifier = ">=1.0" },
+    { name = "litellm", specifier = ">=1.0,<2" },
     { name = "llm-jury-classifier", extras = ["sklearn", "huggingface"], marker = "extra == 'all'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
@@ -952,7 +952,7 @@ requires-dist = [
     { name = "tenacity", specifier = ">=8.0" },
     { name = "torch", marker = "extra == 'huggingface'", specifier = ">=2.0" },
     { name = "transformers", marker = "extra == 'huggingface'", specifier = ">=4.30" },
-    { name = "typer", specifier = ">=0.9" },
+    { name = "typer", specifier = ">=0.16" },
 ]
 provides-extras = ["sklearn", "huggingface", "all", "dev"]
 

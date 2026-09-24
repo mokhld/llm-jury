@@ -30,7 +30,7 @@ body:
     attributes:
       label: Package version
       description: Output of `pip show llm-jury-classifier` or `npm ls @llm-jury/core`.
-      placeholder: "0.1.1"
+      placeholder: "0.2.0"
     validations:
       required: true
 
