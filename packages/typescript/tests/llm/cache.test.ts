@@ -53,7 +53,39 @@ test("repeated call hits cache and skips inner", async () => {
   assert.equal(calls.length, 1);
   assert.equal(cache.hits, 1);
   assert.equal(cache.misses, 1);
-  assert.deepEqual(a, b);
+  assert.equal(b.content, a.content);
+  assert.equal(b.tokens, a.tokens);
+});
+
+test("cache hit reports zero cost and cached: true without mutating the stored entry", async () => {
+  const { client } = countingClient();
+  const cache = new CachingLLMClient(client);
+
+  const miss = await cache.complete("m", "sys", "p", 0, undefined);
+  const hit = await cache.complete("m", "sys", "p", 0, undefined);
+  const hitAgain = await cache.complete("m", "sys", "p", 0, undefined);
+
+  assert.equal(miss.costUsd, 0.001, "the paid call reports its cost");
+  assert.equal(miss.cached, undefined);
+  assert.equal(hit.costUsd, 0, "a replayed response is not billed again");
+  assert.equal(hit.cached, true);
+  assert.notEqual(hit, miss, "hits return a copy");
+  assert.equal(hitAgain.costUsd, 0);
+  assert.equal(miss.costUsd, 0.001, "returning a hit does not rewrite the miss payload");
+});
+
+test("mutating a returned payload does not change the cached entry", async () => {
+  const { client } = countingClient();
+  const cache = new CachingLLMClient(client);
+
+  const miss = await cache.complete("m", "sys", "p", 0, undefined);
+  const original = miss.content;
+  miss.content = "tampered";
+  const hit = await cache.complete("m", "sys", "p", 0, undefined);
+  hit.content = "tampered again";
+  const hitAgain = await cache.complete("m", "sys", "p", 0, undefined);
+
+  assert.equal(hitAgain.content, original);
 });
 
 test("different keys are distinct", async () => {

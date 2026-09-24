@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from llm_jury._defaults import DEFAULT_MODEL
@@ -11,9 +11,44 @@ from llm_jury.classifiers.base import ClassificationResult
 from llm_jury.llm.client import LiteLLMClient, LLMClient
 from llm_jury.personas.base import Persona, PersonaResponse
 from llm_jury.personas.schema import build_persona_response_schema
-from llm_jury.utils import clamp_confidence, safe_json_parse, strip_markdown_fences
+from llm_jury.utils import (
+    add_costs,
+    format_confidence,
+    match_label,
+    parse_confidence,
+    payload_cost,
+    safe_json_parse,
+    strip_markdown_fences,
+    wrap_untrusted,
+)
 
 logger = logging.getLogger(__name__)
+
+# Absorbs float noise so spend that lands exactly on the cap does not trip it.
+COST_CAP_TOLERANCE_USD = 1e-9
+
+
+def guard_spend(
+    known_cost_usd: float | None,
+    unpriced_calls: int,
+    estimated_cost_per_call_usd: float | None,
+) -> float:
+    """Spend the cost guard compares against ``max_debate_cost_usd``.
+
+    Known cost so far plus the per-call estimate for every call that reported
+    no cost, so a client that never reports cost cannot slip past the cap.
+    """
+    return (known_cost_usd or 0.0) + unpriced_calls * (
+        estimated_cost_per_call_usd or 0.0
+    )
+
+
+def exceeds_cost_cap(spend_usd: float, max_cost_usd: float | None) -> bool:
+    """True when ``spend_usd`` is over the cap (``None`` means no cap)."""
+    if max_cost_usd is None:
+        return False
+    return spend_usd > max_cost_usd + COST_CAP_TOLERANCE_USD
+
 
 _SUMMARISATION_PROMPT = (
     "You are a neutral summarisation agent. You have observed a structured debate "
@@ -65,8 +100,16 @@ class DebateTranscript:
     rounds: list[list[PersonaResponse]]
     duration_ms: int
     total_tokens: int
+    # Sum of every persona and summariser call that reported a cost. None only
+    # when no call reported one.
     total_cost_usd: float | None
     summary: str | None = None
+    # LLM calls in the debate (persona and summariser, including calls that
+    # raised) that reported no cost. total_cost_usd leaves them out, so a
+    # non-zero count means the total is a lower bound.
+    unpriced_calls: int = 0
+    # Persona name -> known_bias, for the personas that declare one.
+    persona_biases: dict[str, str] = field(default_factory=dict)
 
     @property
     def persona_failures(self) -> int:
@@ -77,6 +120,26 @@ class DebateTranscript:
 def _valid_responses(responses: list[PersonaResponse]) -> list[PersonaResponse]:
     """Responses that carry a real vote (persona call and parse succeeded)."""
     return [r for r in responses if not r.failed]
+
+
+@dataclass(slots=True)
+class _DebateSpend:
+    """Running token and cost totals for one debate."""
+
+    tokens: int = 0
+    cost_usd: float | None = None
+    unpriced_calls: int = 0
+
+    def record(self, tokens: int, cost_usd: float | None) -> None:
+        self.tokens += tokens
+        if cost_usd is None:
+            self.unpriced_calls += 1
+        else:
+            self.cost_usd = add_costs(self.cost_usd, cost_usd)
+
+    def record_responses(self, responses: list[PersonaResponse]) -> None:
+        for response in responses:
+            self.record(response.tokens_used, response.cost_usd)
 
 
 class DebateEngine:
@@ -98,14 +161,48 @@ class DebateEngine:
         primary_result: ClassificationResult,
         labels: list[str],
         max_cost_usd: float | None = None,
+        estimated_cost_per_call_usd: float | None = None,
     ) -> DebateTranscript:
+        """Run the debate and return its transcript.
+
+        ``max_cost_usd`` caps spend mid-flight: once the guard spend (known
+        cost plus ``estimated_cost_per_call_usd`` for every call that reported
+        no cost) goes over the cap, no further persona round or summariser
+        call starts.
+        """
         start = time.perf_counter()
         rounds: list[list[PersonaResponse]] = []
-        total_tokens = 0
-        total_cost = 0.0
+        spend = _DebateSpend()
         summary: str | None = None
+        persona_biases = {
+            persona.name: persona.known_bias
+            for persona in self.personas
+            if persona.known_bias
+        }
+
+        def over_cap() -> bool:
+            return exceeds_cost_cap(
+                guard_spend(
+                    spend.cost_usd, spend.unpriced_calls, estimated_cost_per_call_usd
+                ),
+                max_cost_usd,
+            )
+
+        def build_transcript() -> DebateTranscript:
+            return DebateTranscript(
+                input_text=text,
+                primary_result=primary_result,
+                rounds=rounds,
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                total_tokens=spend.tokens,
+                total_cost_usd=spend.cost_usd,
+                summary=summary,
+                unpriced_calls=spend.unpriced_calls,
+                persona_biases=persona_biases,
+            )
 
         if not self.personas:
+            # No calls were made, so the cost is known to be zero.
             return DebateTranscript(
                 input_text=text,
                 primary_result=primary_result,
@@ -120,9 +217,7 @@ class DebateEngine:
                 text, primary_result, labels, prior_rounds=[]
             )
             rounds.append(responses)
-            for response in responses:
-                total_tokens += response.tokens_used
-                total_cost += float(response.cost_usd or 0.0)
+            spend.record_responses(responses)
 
         elif self.config.mode == DebateMode.SEQUENTIAL:
             responses: list[PersonaResponse] = []
@@ -145,9 +240,8 @@ class DebateEngine:
                     )
                     response = self._failed_persona_response(persona, exc, labels)
                 responses.append(response)
-                total_tokens += response.tokens_used
-                total_cost += float(response.cost_usd or 0.0)
-                if max_cost_usd is not None and total_cost > max_cost_usd:
+                spend.record(response.tokens_used, response.cost_usd)
+                if over_cap():
                     break
             rounds.append(responses)
 
@@ -157,19 +251,10 @@ class DebateEngine:
                 text, primary_result, labels, prior_rounds=[]
             )
             rounds.append(first_round)
-            for response in first_round:
-                total_tokens += response.tokens_used
-                total_cost += float(response.cost_usd or 0.0)
+            spend.record_responses(first_round)
 
-            if max_cost_usd is not None and total_cost > max_cost_usd:
-                return DebateTranscript(
-                    input_text=text,
-                    primary_result=primary_result,
-                    rounds=rounds,
-                    duration_ms=int((time.perf_counter() - start) * 1000),
-                    total_tokens=total_tokens,
-                    total_cost_usd=total_cost,
-                )
+            if over_cap():
+                return build_transcript()
 
             # If every persona call failed (bad API key, provider outage),
             # further rounds and the summariser are doomed too — stop paying
@@ -180,14 +265,13 @@ class DebateEngine:
                     "aborting debate early.",
                     len(first_round),
                 )
-                return DebateTranscript(
-                    input_text=text,
-                    primary_result=primary_result,
-                    rounds=rounds,
-                    duration_ms=int((time.perf_counter() - start) * 1000),
-                    total_tokens=total_tokens,
-                    total_cost_usd=total_cost,
-                )
+                return build_transcript()
+
+            # Consensus in the opening round (unanimous labels, or the
+            # early_stop_min_confidence rule) settles the debate: skip the
+            # deliberation rounds and the summariser.
+            if self._consensus_reached(first_round):
+                return build_transcript()
 
             # Stage 2: Structured debate rounds (personas engage with prior opinions)
             for _ in range(1, max(1, self.config.max_rounds)):
@@ -198,11 +282,9 @@ class DebateEngine:
                     prior_rounds=rounds,
                 )
                 rounds.append(current)
-                for response in current:
-                    total_tokens += response.tokens_used
-                    total_cost += float(response.cost_usd or 0.0)
+                spend.record_responses(current)
 
-                if max_cost_usd is not None and total_cost > max_cost_usd:
+                if over_cap():
                     break
                 if not _valid_responses(current):
                     logger.warning(
@@ -217,13 +299,12 @@ class DebateEngine:
             # Stage 3: Summarisation — degrade gracefully if the summariser
             # call fails. The persona rounds are the load-bearing output; a
             # missing synthesis must not crash the verdict.
-            if not (max_cost_usd is not None and total_cost > max_cost_usd):
+            if not over_cap():
                 try:
                     summary, s_tokens, s_cost = await self._summarise(
                         text, labels, rounds
                     )
-                    total_tokens += s_tokens
-                    total_cost += s_cost
+                    spend.record(s_tokens, s_cost)
                 except (
                     Exception
                 ) as exc:  # noqa: BLE001 — same rationale as per-persona fallback
@@ -231,18 +312,11 @@ class DebateEngine:
                         "Summarisation failed; returning transcript without summary: %s",
                         exc,
                     )
+                    # The failed call may still have been billed; its cost is unknown.
+                    spend.record(0, None)
                     summary = None
 
-        duration_ms = int((time.perf_counter() - start) * 1000)
-        return DebateTranscript(
-            input_text=text,
-            primary_result=primary_result,
-            rounds=rounds,
-            duration_ms=duration_ms,
-            total_tokens=total_tokens,
-            total_cost_usd=total_cost,
-            summary=summary,
-        )
+        return build_transcript()
 
     # ------------------------------------------------------------------
     # Round runners
@@ -371,11 +445,11 @@ class DebateEngine:
             temperature=persona.temperature,
             response_format=build_persona_response_schema(labels),
         )
-        raw_content = payload.get("content", "")
+        raw_content = str(payload.get("content") or "")
         response = self._parse_persona_response(raw_content, persona.name, labels)
         response.raw_response = raw_content
         response.tokens_used = int(payload.get("tokens", 0) or 0)
-        response.cost_usd = float(payload.get("cost_usd", 0.0) or 0.0)
+        response.cost_usd = payload_cost(payload)
         return response
 
     # ------------------------------------------------------------------
@@ -387,10 +461,14 @@ class DebateEngine:
         text: str,
         labels: list[str],
         rounds: list[list[PersonaResponse]],
-    ) -> tuple[str, int, float]:
-        """Produce a structured summary of the debate. Returns (summary, tokens, cost)."""
+    ) -> tuple[str, int, float | None]:
+        """Produce a structured summary of the debate.
+
+        Returns ``(summary, tokens, cost)``; cost is ``None`` when the client
+        reported none.
+        """
         parts = [
-            f"## Input\n\n{text}\n",
+            f"## Input\n\n{wrap_untrusted(text)}\n",
             f"## Labels\n\n{', '.join(labels)}\n",
         ]
 
@@ -421,8 +499,7 @@ class DebateEngine:
         )
         summary_text = payload.get("content", "")
         tokens = int(payload.get("tokens", 0) or 0)
-        cost = float(payload.get("cost_usd", 0.0) or 0.0)
-        return summary_text, tokens, cost
+        return summary_text, tokens, payload_cost(payload)
 
     # ------------------------------------------------------------------
     # Prompt builders
@@ -438,7 +515,7 @@ class DebateEngine:
     ) -> str:
         parts = [
             f"## Persona\n\n{persona.name}: {persona.role}\n",
-            f"## Input to Classify\n\n{text}\n",
+            f"## Input to Classify\n\n{wrap_untrusted(text)}\n",
         ]
         parts.append(f"## Available Labels\n\n{', '.join(labels)}\n")
 
@@ -453,7 +530,7 @@ class DebateEngine:
 
         if self.config.include_primary_result:
             confidence_suffix = (
-                f" (confidence: {primary.confidence:.2f})"
+                f" (confidence: {format_confidence(primary.confidence)})"
                 if self.config.include_confidence
                 else ""
             )
@@ -489,13 +566,13 @@ class DebateEngine:
     ) -> str:
         parts = [
             f"## Persona\n\n{persona.name}: {persona.role}\n",
-            f"## Input to Classify\n\n{text}\n",
+            f"## Input to Classify\n\n{wrap_untrusted(text)}\n",
         ]
         parts.append(f"## Available Labels\n\n{', '.join(labels)}\n")
 
         if self.config.include_primary_result:
             confidence_suffix = (
-                f" (confidence: {primary.confidence:.2f})"
+                f" (confidence: {format_confidence(primary.confidence)})"
                 if self.config.include_confidence
                 else ""
             )
@@ -558,32 +635,72 @@ class DebateEngine:
         persona_name: str,
         labels: list[str] | None = None,
     ) -> PersonaResponse:
-        payload = safe_json_parse(strip_markdown_fences(raw))
-        if not isinstance(payload, dict):
+        """Parse a persona reply into a vote.
+
+        Output that is not JSON, names a label outside ``labels`` or carries
+        a confidence that is not a finite number becomes a ``failed``
+        placeholder: it stays in the transcript for audit but casts no vote.
+        Matched labels are returned in their configured spelling.
+        """
+        fallback_label = labels[0] if labels else "unknown"
+
+        def failed(problem: str, reason: str) -> PersonaResponse:
             logger.warning(
-                "Persona %s returned invalid JSON; using fallback.", persona_name
+                "Persona %s returned %s; recording a failed response.",
+                persona_name,
+                problem,
             )
-            fallback_label = labels[0] if labels else "unknown"
             return PersonaResponse(
                 persona_name=persona_name,
                 label=fallback_label,
                 confidence=0.0,
-                reasoning=f"Failed to parse persona response as JSON: {raw[:200]}",
+                reasoning=reason,
                 key_factors=[],
+                raw_response=raw,
                 failed=True,
             )
 
+        payload = safe_json_parse(strip_markdown_fences(raw))
+        if not isinstance(payload, dict):
+            return failed(
+                "invalid JSON",
+                f"Failed to parse persona response as JSON: {raw[:200]}",
+            )
+
+        raw_label = payload.get("label")
+        label = match_label(raw_label, labels or [])
+        if label is None:
+            return failed(
+                "a label outside the configured labels",
+                f"Persona returned label '{raw_label}', which is not one of the "
+                "configured labels.",
+            )
+
+        raw_confidence = payload.get("confidence")
+        confidence = parse_confidence(raw_confidence)
+        if confidence is None:
+            return failed(
+                "an invalid confidence",
+                f"Persona returned confidence '{raw_confidence}', which is not a "
+                "finite number.",
+            )
+
         dissent_raw = payload.get("dissent_notes")
+        key_factors_raw = payload.get("key_factors")
         return PersonaResponse(
             persona_name=persona_name,
-            label=str(payload.get("label", "unknown")),
-            confidence=clamp_confidence(payload.get("confidence", 0.0)),
+            label=label,
+            confidence=confidence,
             reasoning=str(payload.get("reasoning", "")),
-            key_factors=[str(item) for item in payload.get("key_factors", [])],
+            key_factors=(
+                [str(item) for item in key_factors_raw]
+                if isinstance(key_factors_raw, list)
+                else []
+            ),
             dissent_notes=str(dissent_raw) if dissent_raw is not None else None,
             raw_response=None,
             tokens_used=0,
-            cost_usd=0.0,
+            cost_usd=None,
         )
 
     def _consensus_reached(self, round_responses: list[PersonaResponse]) -> bool:

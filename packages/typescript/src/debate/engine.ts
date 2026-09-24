@@ -6,7 +6,39 @@ import { NOOP_LOGGER } from "../logger.ts";
 import type { Logger } from "../logger.ts";
 import type { Persona, PersonaResponse } from "../personas/base.ts";
 import { buildPersonaResponseSchema } from "../personas/schema.ts";
-import { stripMarkdown } from "../utils.ts";
+import {
+  addCosts,
+  formatConfidence,
+  matchLabel,
+  parseConfidence,
+  safeJsonObject,
+  stripMarkdown,
+  wrapUntrusted,
+} from "../utils.ts";
+
+/** Absorbs float noise so spend that lands exactly on the cap does not trip it. */
+export const COST_CAP_TOLERANCE_USD = 1e-9;
+
+/**
+ * Spend the cost guards compare against the cap: the known cost so far plus
+ * the per-call estimate for every call that reported no cost, so a client
+ * that never reports cost cannot slip past the cap.
+ */
+export function guardSpend(
+  knownCostUsd: number | null | undefined,
+  unpricedCalls: number,
+  estimatedCostPerCallUsd: number | null | undefined,
+): number {
+  return (knownCostUsd ?? 0) + unpricedCalls * (estimatedCostPerCallUsd ?? 0);
+}
+
+/** True when `spendUsd` is over the cap (null/undefined means no cap). */
+export function exceedsCostCap(spendUsd: number, maxCostUsd: number | null | undefined): boolean {
+  if (maxCostUsd == null) {
+    return false;
+  }
+  return spendUsd > maxCostUsd + COST_CAP_TOLERANCE_USD;
+}
 
 const SUMMARISATION_PROMPT =
   "You are a neutral summarisation agent. You have observed a structured debate " +
@@ -43,7 +75,17 @@ export type DebateTranscript = {
   summary?: string;
   durationMs: number;
   totalTokens: number;
+  // Sum of the costs reported by the persona and summariser calls; null when
+  // no call reported a cost.
   totalCostUsd: number | null;
+  // LLM calls in the debate (persona and summariser, including calls that
+  // threw) that reported no cost. totalCostUsd leaves them out, so a
+  // non-zero count means the total is a lower bound. Always set by
+  // DebateEngine; optional so hand-built transcripts still type-check.
+  unpricedCalls?: number;
+  // Persona name -> knownBias, for the personas that declare one. Always
+  // set by DebateEngine.
+  personaBiases?: Record<string, string>;
 };
 
 /** Responses that carry a real vote (persona call and parse succeeded). */
@@ -117,35 +159,61 @@ export class DebateEngine {
     );
   }
 
+  /**
+   * Run the debate.
+   *
+   * `maxCostUsd` caps the debate's spend. Spend is the cost reported so far
+   * plus `estimatedCostPerCallUsd` for every call that reported no cost, so
+   * the cap still works with clients that never report cost. Once spend is
+   * over the cap no new persona batch, round or summariser call starts.
+   */
   async debate(
     text: string,
     primaryResult: ClassificationResult,
     labels: string[],
     maxCostUsd: number | null = null,
+    estimatedCostPerCallUsd = 0,
   ): Promise<DebateTranscript> {
     const start = Date.now();
     const rounds: PersonaResponse[][] = [];
+    const perCallEstimate = Math.max(0, Number(estimatedCostPerCallUsd) || 0);
     let totalTokens = 0;
-    let totalCostUsd = 0;
+    let totalCostUsd: number | null = null;
+    let unpricedCalls = 0;
+
+    const recordCall = (tokens: number | undefined, costUsd: number | null | undefined): void => {
+      totalTokens += Number(tokens ?? 0);
+      if (costUsd == null) {
+        unpricedCalls += 1;
+      } else {
+        totalCostUsd = addCosts(totalCostUsd, costUsd);
+      }
+    };
+    const recordRound = (responses: PersonaResponse[]): void => {
+      responses.forEach((response) => recordCall(response.tokensUsed, response.costUsd));
+    };
+    const spendSoFar = (): number => guardSpend(totalCostUsd, unpricedCalls, perCallEstimate);
+    const overBudget = (): boolean => exceedsCostCap(spendSoFar(), maxCostUsd);
+    const transcript = (summary?: string): DebateTranscript => ({
+      inputText: text,
+      primaryResult,
+      rounds,
+      summary,
+      durationMs: Date.now() - start,
+      totalTokens,
+      totalCostUsd,
+      unpricedCalls,
+      personaBiases: this.personaBiases(),
+    });
 
     if (this.personas.length === 0) {
-      return {
-        inputText: text,
-        primaryResult,
-        rounds: [],
-        durationMs: Date.now() - start,
-        totalTokens: 0,
-        totalCostUsd: 0,
-      };
+      return { ...transcript(), totalCostUsd: 0 };
     }
 
     if (this.config.mode === DebateMode.INDEPENDENT || this.config.mode === DebateMode.ADVERSARIAL) {
-      const responses = await this.runRound(text, primaryResult, labels, [], maxCostUsd, totalCostUsd);
+      const responses = await this.runRound(text, primaryResult, labels, [], maxCostUsd, spendSoFar(), perCallEstimate);
       rounds.push(responses);
-      responses.forEach((response) => {
-        totalTokens += Number(response.tokensUsed ?? 0);
-        totalCostUsd += Number(response.costUsd ?? 0);
-      });
+      recordRound(responses);
     } else if (this.config.mode === DebateMode.SEQUENTIAL) {
       const responses: PersonaResponse[] = [];
       for (const persona of this.personas) {
@@ -162,30 +230,19 @@ export class DebateEngine {
           response = this.failedPersonaResponse(persona, err, labels);
         }
         responses.push(response);
-        totalTokens += Number(response.tokensUsed ?? 0);
-        totalCostUsd += Number(response.costUsd ?? 0);
-        if (maxCostUsd != null && totalCostUsd > maxCostUsd) {
+        recordCall(response.tokensUsed, response.costUsd);
+        if (overBudget()) {
           break;
         }
       }
       rounds.push(responses);
     } else if (this.config.mode === DebateMode.DELIBERATION) {
-      const firstRound = await this.runRound(text, primaryResult, labels, [], maxCostUsd, totalCostUsd);
+      const firstRound = await this.runRound(text, primaryResult, labels, [], maxCostUsd, spendSoFar(), perCallEstimate);
       rounds.push(firstRound);
-      firstRound.forEach((response) => {
-        totalTokens += Number(response.tokensUsed ?? 0);
-        totalCostUsd += Number(response.costUsd ?? 0);
-      });
+      recordRound(firstRound);
 
-      if (maxCostUsd != null && totalCostUsd > maxCostUsd) {
-        return {
-          inputText: text,
-          primaryResult,
-          rounds,
-          durationMs: Date.now() - start,
-          totalTokens,
-          totalCostUsd,
-        };
+      if (overBudget()) {
+        return transcript();
       }
 
       // If every persona call failed (bad API key, provider outage),
@@ -196,25 +253,30 @@ export class DebateEngine {
           "[llm-jury] all persona calls failed in the opening round; aborting debate early",
           { personas: firstRound.length },
         );
-        return {
-          inputText: text,
-          primaryResult,
-          rounds,
-          durationMs: Date.now() - start,
-          totalTokens,
-          totalCostUsd,
-        };
+        return transcript();
+      }
+
+      // Consensus in the opening round (unanimous labels, or the
+      // earlyStopMinConfidence rule) makes further rounds and the summary
+      // redundant: the judge gets the opening round only.
+      if (this.consensusReached(firstRound)) {
+        return transcript();
       }
 
       for (let i = 1; i < Math.max(1, this.config.maxRounds); i += 1) {
-        const current = await this.runDeliberationRound(text, primaryResult, labels, rounds, maxCostUsd, totalCostUsd);
+        const current = await this.runDeliberationRound(
+          text,
+          primaryResult,
+          labels,
+          rounds,
+          maxCostUsd,
+          spendSoFar(),
+          perCallEstimate,
+        );
         rounds.push(current);
-        current.forEach((response) => {
-          totalTokens += Number(response.tokensUsed ?? 0);
-          totalCostUsd += Number(response.costUsd ?? 0);
-        });
+        recordRound(current);
 
-        if (maxCostUsd != null && totalCostUsd > maxCostUsd) {
+        if (overBudget()) {
           break;
         }
         if (validResponses(current).length === 0) {
@@ -233,38 +295,24 @@ export class DebateEngine {
       // fails. The persona rounds are the load-bearing output; a missing
       // synthesis must not crash the verdict.
       let summary: string | undefined;
-      if (maxCostUsd == null || totalCostUsd <= maxCostUsd) {
+      if (!overBudget()) {
         try {
           const summaryResult = await this.summarise(text, labels, rounds);
-          totalTokens += summaryResult.tokens;
-          totalCostUsd += summaryResult.cost;
+          recordCall(summaryResult.tokens, summaryResult.cost);
           summary = summaryResult.summary;
         } catch (err) {
+          // A call that threw reported no cost; count it as unpriced.
+          recordCall(0, null);
           this.logger.warn("[llm-jury] summarisation failed; returning transcript without summary", {
             error: err instanceof Error ? err.message : String(err),
           });
         }
       }
 
-      return {
-        inputText: text,
-        primaryResult,
-        rounds,
-        summary,
-        durationMs: Date.now() - start,
-        totalTokens,
-        totalCostUsd,
-      };
+      return transcript(summary);
     }
 
-    return {
-      inputText: text,
-      primaryResult,
-      rounds,
-      durationMs: Date.now() - start,
-      totalTokens,
-      totalCostUsd,
-    };
+    return transcript();
   }
 
   async runRound(
@@ -274,34 +322,15 @@ export class DebateEngine {
     priorRounds: PersonaResponse[][],
     maxCostUsd: number | null = null,
     costSoFar = 0,
+    estimatedCostPerCallUsd = 0,
   ): Promise<PersonaResponse[]> {
-    const out: PersonaResponse[] = [];
-    let cumulative = costSoFar;
-    for (let i = 0; i < this.personas.length; i += this.concurrency) {
-      if (maxCostUsd != null && cumulative > maxCostUsd) {
-        this.logger.warn("[llm-jury] cost cap reached mid-round; halting remaining personas", {
-          cumulativeCostUsd: cumulative,
-          maxCostUsd,
-          personasRun: out.length,
-          personasRemaining: this.personas.length - i,
-        });
-        break;
-      }
-      const batch = this.personas.slice(i, i + this.concurrency);
-      const settled = await Promise.allSettled(
-        batch.map((persona) => this.queryPersona(persona, text, primaryResult, labels, priorRounds)),
-      );
-      settled.forEach((result, idx) => {
-        const persona = batch[idx]!;
-        if (result.status === "fulfilled") {
-          out.push(result.value);
-          cumulative += Number(result.value.costUsd ?? 0);
-        } else {
-          out.push(this.failedPersonaResponse(persona, result.reason, labels));
-        }
-      });
-    }
-    return out;
+    return this.runBatched(
+      (persona) => this.queryPersona(persona, text, primaryResult, labels, priorRounds),
+      labels,
+      maxCostUsd,
+      costSoFar,
+      estimatedCostPerCallUsd,
+    );
   }
 
   async runDeliberationRound(
@@ -311,11 +340,35 @@ export class DebateEngine {
     priorRounds: PersonaResponse[][],
     maxCostUsd: number | null = null,
     costSoFar = 0,
+    estimatedCostPerCallUsd = 0,
+  ): Promise<PersonaResponse[]> {
+    return this.runBatched(
+      (persona) => this.queryPersonaDeliberation(persona, text, primaryResult, labels, priorRounds),
+      labels,
+      maxCostUsd,
+      costSoFar,
+      estimatedCostPerCallUsd,
+    );
+  }
+
+  /**
+   * Query every persona in batches of `concurrency`. Before each batch the
+   * running spend (`costSoFar` plus each response's reported cost, or
+   * `estimatedCostPerCallUsd` when it reported none or the call threw) is
+   * checked against `maxCostUsd`; once it is over the cap the remaining
+   * personas are skipped.
+   */
+  private async runBatched(
+    query: (persona: Persona) => Promise<PersonaResponse>,
+    labels: string[],
+    maxCostUsd: number | null,
+    costSoFar: number,
+    estimatedCostPerCallUsd: number,
   ): Promise<PersonaResponse[]> {
     const out: PersonaResponse[] = [];
     let cumulative = costSoFar;
     for (let i = 0; i < this.personas.length; i += this.concurrency) {
-      if (maxCostUsd != null && cumulative > maxCostUsd) {
+      if (exceedsCostCap(cumulative, maxCostUsd)) {
         this.logger.warn("[llm-jury] cost cap reached mid-round; halting remaining personas", {
           cumulativeCostUsd: cumulative,
           maxCostUsd,
@@ -325,24 +378,25 @@ export class DebateEngine {
         break;
       }
       const batch = this.personas.slice(i, i + this.concurrency);
-      const settled = await Promise.allSettled(
-        batch.map((persona) =>
-          this.queryPersonaDeliberation(persona, text, primaryResult, labels, priorRounds),
-        ),
-      );
+      const settled = await Promise.allSettled(batch.map((persona) => query(persona)));
       settled.forEach((result, idx) => {
         const persona = batch[idx]!;
         if (result.status === "fulfilled") {
           out.push(result.value);
-          cumulative += Number(result.value.costUsd ?? 0);
+          cumulative += result.value.costUsd ?? estimatedCostPerCallUsd;
         } else {
           out.push(this.failedPersonaResponse(persona, result.reason, labels));
+          cumulative += estimatedCostPerCallUsd;
         }
       });
     }
     return out;
   }
 
+  /**
+   * Placeholder for a persona whose call threw. `costUsd` is left undefined:
+   * the call reported no cost, so the transcript counts it as unpriced.
+   */
   failedPersonaResponse(persona: Persona, error: unknown, labels: string[]): PersonaResponse {
     const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     this.logger.warn(`[llm-jury] persona ${persona.name} failed during debate`, { error: message });
@@ -353,7 +407,6 @@ export class DebateEngine {
       reasoning: `Persona call failed: ${message}`,
       keyFactors: [],
       tokensUsed: 0,
-      costUsd: 0,
       failed: true,
     };
   }
@@ -366,13 +419,7 @@ export class DebateEngine {
     priorRounds: PersonaResponse[][],
   ): Promise<PersonaResponse> {
     const prompt = this.buildPersonaPrompt(persona, text, primaryResult, labels, priorRounds);
-    const schema = buildPersonaResponseSchema(labels) as unknown as Record<string, unknown>;
-    const payload = await this.llmClient.complete(persona.model, persona.systemPrompt, prompt, persona.temperature, schema);
-    const parsed = this.parsePersonaResponse(payload.content, persona.name);
-    parsed.rawResponse = payload.content;
-    parsed.tokensUsed = Number(payload.tokens ?? 0);
-    parsed.costUsd = Number(payload.costUsd ?? 0);
-    return parsed;
+    return this.callPersona(persona, prompt, labels);
   }
 
   async queryPersonaDeliberation(
@@ -383,12 +430,23 @@ export class DebateEngine {
     priorRounds: PersonaResponse[][],
   ): Promise<PersonaResponse> {
     const prompt = this.buildDeliberationPrompt(persona, text, primaryResult, labels, priorRounds);
+    return this.callPersona(persona, prompt, labels);
+  }
+
+  private async callPersona(persona: Persona, prompt: string, labels: string[]): Promise<PersonaResponse> {
     const schema = buildPersonaResponseSchema(labels) as unknown as Record<string, unknown>;
     const payload = await this.llmClient.complete(persona.model, persona.systemPrompt, prompt, persona.temperature, schema);
-    const parsed = this.parsePersonaResponse(payload.content, persona.name);
+    const parsed = this.parsePersonaResponse(payload.content, persona.name, labels);
+    if (parsed.failed) {
+      this.logger.warn(`[llm-jury] persona ${persona.name} returned an unusable response`, {
+        reasoning: parsed.reasoning,
+      });
+    }
     parsed.rawResponse = payload.content;
     parsed.tokensUsed = Number(payload.tokens ?? 0);
-    parsed.costUsd = Number(payload.costUsd ?? 0);
+    // Unreported cost stays undefined so the transcript can count the call
+    // as unpriced instead of recording a false $0.
+    parsed.costUsd = payload.costUsd == null ? undefined : Number(payload.costUsd);
     return parsed;
   }
 
@@ -401,7 +459,7 @@ export class DebateEngine {
   ): string {
     const parts: string[] = [];
     parts.push(`## Persona\n\n${persona.name}: ${persona.role}\n`);
-    parts.push(`## Input to Classify\n\n${text}\n`);
+    parts.push(`## Input to Classify\n\n${wrapUntrusted(text)}\n`);
     parts.push(`## Available Labels\n\n${labels.join(", ")}\n`);
 
     if (this.config.mode === DebateMode.ADVERSARIAL) {
@@ -414,7 +472,7 @@ export class DebateEngine {
     }
 
     if (this.config.includePrimaryResult) {
-      const confidence = this.config.includeConfidence ? ` (confidence: ${primary.confidence.toFixed(2)})` : "";
+      const confidence = this.config.includeConfidence ? ` (confidence: ${formatConfidence(primary.confidence)})` : "";
       parts.push(
         "## Primary Classifier Result\n\n" +
           `Label: ${primary.label}${confidence}\n` +
@@ -453,11 +511,11 @@ export class DebateEngine {
   ): string {
     const parts: string[] = [];
     parts.push(`## Persona\n\n${persona.name}: ${persona.role}\n`);
-    parts.push(`## Input to Classify\n\n${text}\n`);
+    parts.push(`## Input to Classify\n\n${wrapUntrusted(text)}\n`);
     parts.push(`## Available Labels\n\n${labels.join(", ")}\n`);
 
     if (this.config.includePrimaryResult) {
-      const confidence = this.config.includeConfidence ? ` (confidence: ${primary.confidence.toFixed(2)})` : "";
+      const confidence = this.config.includeConfidence ? ` (confidence: ${formatConfidence(primary.confidence)})` : "";
       parts.push(
         "## Primary Classifier Result\n\n" +
           `Label: ${primary.label}${confidence}\n` +
@@ -492,13 +550,17 @@ export class DebateEngine {
     return parts.join("\n");
   }
 
+  /**
+   * Summarise the debate with one LLM call. `cost` is null when the client
+   * reported no cost for the call.
+   */
   async summarise(
     text: string,
     labels: string[],
     rounds: PersonaResponse[][],
-  ): Promise<{ summary: string; tokens: number; cost: number }> {
+  ): Promise<{ summary: string; tokens: number; cost: number | null }> {
     const parts: string[] = [];
-    parts.push(`## Input\n\n${text}\n`);
+    parts.push(`## Input\n\n${wrapUntrusted(text)}\n`);
     parts.push(`## Available Labels\n\n${labels.join(", ")}\n`);
     parts.push("## Expert Debate\n");
     rounds.forEach((roundResponses, idx) => {
@@ -525,45 +587,51 @@ export class DebateEngine {
     return {
       summary: payload.content,
       tokens: Number(payload.tokens ?? 0),
-      cost: Number(payload.costUsd ?? 0),
+      cost: payload.costUsd == null ? null : Number(payload.costUsd),
     };
   }
 
-  parsePersonaResponse(raw: string, personaName: string): PersonaResponse {
-    type ParsedPersonaPayload = {
-      label?: string;
-      confidence?: number;
-      reasoning?: string;
-      key_factors?: string[];
-      dissent_notes?: string | null;
-    };
-    let parsed: ParsedPersonaPayload;
-    try {
-      const candidate = JSON.parse(stripMarkdown(raw)) as unknown;
-      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-        throw new Error("Persona response must be a JSON object.");
-      }
-      parsed = candidate as ParsedPersonaPayload;
-    } catch {
-      return {
-        personaName,
-        label: "unknown",
-        confidence: 0,
-        reasoning: `Failed to parse persona response: ${raw.slice(0, 200)}`,
-        keyFactors: [],
-        failed: true,
-      };
+  /**
+   * Parse a persona's raw output. The response is marked `failed` (it stays
+   * in the transcript but carries no vote) when the output is not a JSON
+   * object, the label does not match one of `labels`, or the confidence is
+   * not a finite number. Matched labels are returned in their configured
+   * spelling. An empty `labels` accepts any non-empty label.
+   */
+  parsePersonaResponse(raw: string, personaName: string, labels: string[] = []): PersonaResponse {
+    const failed = (reasoning: string): PersonaResponse => ({
+      personaName,
+      label: "unknown",
+      confidence: 0,
+      reasoning,
+      keyFactors: [],
+      failed: true,
+    });
+
+    const parsed = safeJsonObject(stripMarkdown(raw));
+    if (!parsed) {
+      return failed(`Failed to parse persona response: ${raw.slice(0, 200)}`);
+    }
+
+    const label = matchLabel(parsed.label, labels);
+    if (label === null) {
+      return failed(
+        `Persona returned label '${String(parsed.label)}', which is not one of the configured labels.`,
+      );
+    }
+
+    const confidence = parseConfidence(parsed.confidence);
+    if (confidence === null) {
+      return failed(`Persona returned confidence '${String(parsed.confidence)}', which is not a finite number.`);
     }
 
     return {
       personaName,
-      label: String(parsed.label ?? "unknown"),
-      confidence: Number(parsed.confidence ?? 0),
+      label,
+      confidence,
       reasoning: String(parsed.reasoning ?? ""),
       keyFactors: Array.isArray(parsed.key_factors) ? parsed.key_factors.map(String) : [],
       dissentNotes: parsed.dissent_notes == null ? undefined : String(parsed.dissent_notes),
-      tokensUsed: 0,
-      costUsd: 0,
     };
   }
 
@@ -590,5 +658,15 @@ export class DebateEngine {
       }
     }
     return false;
+  }
+
+  private personaBiases(): Record<string, string> {
+    const biases: Record<string, string> = {};
+    for (const persona of this.personas) {
+      if (persona.knownBias) {
+        biases[persona.name] = persona.knownBias;
+      }
+    }
+    return biases;
   }
 }

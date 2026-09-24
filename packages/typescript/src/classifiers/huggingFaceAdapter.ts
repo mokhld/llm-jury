@@ -7,6 +7,7 @@ export type HuggingFaceLabelScore = {
 
 export type HuggingFacePipeline = (
   text: string,
+  options?: Record<string, unknown>,
 ) =>
   | HuggingFaceLabelScore[]
   | Promise<HuggingFaceLabelScore[]>
@@ -17,8 +18,32 @@ export type HuggingFaceClassifierOptions = {
   modelName?: string;
   device?: string;
   pipeline?: HuggingFacePipeline;
+  /**
+   * Labels the jury debates over. When omitted they are taken from the
+   * model's full score list on the first call.
+   */
+  labels?: string[];
 };
 
+// transformers.js returns only the top label unless asked for every score.
+// `topk` is the @xenova/transformers v2 option and `top_k` the
+// @huggingface/transformers v3 one; null means "all labels" in both.
+const ALL_SCORES_OPTIONS: Record<string, unknown> = { topk: null, top_k: null };
+
+function scoreList(raw: unknown): HuggingFaceLabelScore[] {
+  if (Array.isArray(raw)) {
+    return (Array.isArray(raw[0]) ? raw[0] : raw) as HuggingFaceLabelScore[];
+  }
+  if (raw && typeof raw === "object" && "label" in raw) {
+    return [raw as HuggingFaceLabelScore];
+  }
+  return [];
+}
+
+/**
+ * Local transformers.js text-classification pipeline as the primary
+ * classifier. Results report `costUsd: 0` because no paid API is called.
+ */
 export class HuggingFaceClassifier implements Classifier {
   public labels: string[];
   private modelName?: string;
@@ -26,7 +51,7 @@ export class HuggingFaceClassifier implements Classifier {
   private pipeline?: HuggingFacePipeline;
 
   constructor(options: HuggingFaceClassifierOptions = {}) {
-    this.labels = [];
+    this.labels = options.labels ? [...options.labels] : [];
     this.modelName = options.modelName;
     this.device = options.device ?? "cpu";
     this.pipeline = options.pipeline;
@@ -34,9 +59,8 @@ export class HuggingFaceClassifier implements Classifier {
 
   async classify(text: string): Promise<ClassificationResult> {
     const runner = await this.resolvePipeline();
-    const raw = await runner(text);
-    const normalized = Array.isArray(raw[0]) ? (raw as HuggingFaceLabelScore[][])[0] : (raw as HuggingFaceLabelScore[]);
-    if (!normalized || normalized.length === 0) {
+    const normalized = scoreList(await runner(text, { ...ALL_SCORES_OPTIONS }));
+    if (normalized.length === 0) {
       throw new Error("HuggingFace pipeline returned no scores");
     }
 
@@ -47,7 +71,9 @@ export class HuggingFaceClassifier implements Classifier {
       }
     }
 
-    if (this.labels.length === 0) {
+    // A single score is not the full label distribution (e.g. an injected
+    // pipeline that ignores the all-scores options), so it does not set labels.
+    if (this.labels.length === 0 && normalized.length > 1) {
       this.labels = normalized.map((item) => item.label);
     }
 
@@ -55,6 +81,7 @@ export class HuggingFaceClassifier implements Classifier {
       label: top.label,
       confidence: Number(top.score),
       rawOutput: normalized,
+      costUsd: 0,
     };
   }
 

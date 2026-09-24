@@ -2,7 +2,50 @@ from __future__ import annotations
 
 import unittest
 
-from llm_jury.personas.schema import build_persona_response_schema
+from llm_jury.personas.schema import (
+    build_classifier_response_schema,
+    build_judge_response_schema,
+    build_persona_response_schema,
+)
+
+
+class ClassifierAndJudgeSchemaTests(unittest.TestCase):
+    def test_classifier_schema_is_strict_with_label_enum(self) -> None:
+        rf = build_classifier_response_schema(["safe", "unsafe"])
+
+        self.assertEqual(rf["type"], "json_schema")
+        self.assertEqual(rf["json_schema"]["name"], "classifier_response")
+        self.assertIs(rf["json_schema"]["strict"], True)
+        schema = rf["json_schema"]["schema"]
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(sorted(schema["required"]), ["confidence", "label"])
+        self.assertEqual(schema["properties"]["label"]["enum"], ["safe", "unsafe"])
+        self.assertEqual(schema["properties"]["confidence"], {"type": "number"})
+
+    def test_judge_schema_is_strict_with_label_enum(self) -> None:
+        rf = build_judge_response_schema(["allow", "reject"])
+
+        self.assertEqual(rf["json_schema"]["name"], "judge_response")
+        self.assertIs(rf["json_schema"]["strict"], True)
+        schema = rf["json_schema"]["schema"]
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(
+            sorted(schema["required"]),
+            sorted(
+                [
+                    "label",
+                    "confidence",
+                    "reasoning",
+                    "key_agreements",
+                    "key_disagreements",
+                    "decisive_factor",
+                ]
+            ),
+        )
+        props = schema["properties"]
+        self.assertEqual(props["label"]["enum"], ["allow", "reject"])
+        self.assertEqual(props["key_agreements"]["items"], {"type": "string"})
+        self.assertEqual(props["decisive_factor"], {"type": "string"})
 
 
 class PersonaResponseSchemaTests(unittest.TestCase):

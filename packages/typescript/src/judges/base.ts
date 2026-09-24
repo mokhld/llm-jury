@@ -13,6 +13,7 @@ export type VerdictInit = {
   totalDurationMs: number;
   totalCostUsd: number | null;
   personaFailures?: number;
+  judgeDetails?: Record<string, unknown> | null;
   libraryVersion?: string;
   createdAt?: string;
 };
@@ -30,6 +31,10 @@ export class Verdict {
   // Number of persona calls across the debate that failed (LLM error or
   // unparseable output). Set authoritatively by Jury after judging.
   personaFailures: number;
+  // Judge-specific audit data. LLMJudge stores keyAgreements,
+  // keyDisagreements and decisiveFactor here; null for other judges and
+  // for verdicts that did not come from a judge.
+  judgeDetails: Record<string, unknown> | null;
   libraryVersion: string;
   createdAt: string;
 
@@ -44,6 +49,7 @@ export class Verdict {
     this.totalDurationMs = init.totalDurationMs;
     this.totalCostUsd = init.totalCostUsd;
     this.personaFailures = init.personaFailures ?? 0;
+    this.judgeDetails = init.judgeDetails ?? null;
     this.libraryVersion = init.libraryVersion ?? LIBRARY_VERSION;
     this.createdAt = init.createdAt ?? new Date().toISOString();
   }
@@ -71,6 +77,7 @@ export class Verdict {
       totalCostUsd: this.totalCostUsd,
       personaFailures: this.personaFailures,
       debateDegraded: this.debateDegraded,
+      judgeDetails: this.judgeDetails,
       libraryVersion: this.libraryVersion,
       createdAt: this.createdAt,
     };

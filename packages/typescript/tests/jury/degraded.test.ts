@@ -96,6 +96,31 @@ test("classifyBatch rejects on first failure by default", async () => {
   );
 });
 
+test("classifyBatch stops starting classify calls after the first failure", async () => {
+  let classifierCalls = 0;
+  const jury = new Jury({
+    classifier: new FunctionClassifier(async (text) => {
+      classifierCalls += 1;
+      if (text === "boom") {
+        throw new Error("classifier exploded");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return ["safe", 0.95];
+    }, ["safe", "unsafe"]),
+    personas: [],
+    confidenceThreshold: 0.7,
+  });
+  const texts = ["boom", ...Array.from({ length: 19 }, (_, i) => `ok-${i}`)];
+
+  await assert.rejects(() => jury.classifyBatch(texts, 2), /classifier exploded/);
+  const atRejection = classifierCalls;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  // "boom" and the one text already in flight beside it; nothing after.
+  assert.ok(atRejection <= 2, `calls at rejection: ${atRejection}`);
+  assert.equal(classifierCalls, atRejection, "no classify call starts after the batch rejected");
+});
+
 test("classifyBatch with returnExceptions preserves successful verdicts", async () => {
   const results = await flakyJury().classifyBatch(["ok", "boom", "ok"], 1, true);
 

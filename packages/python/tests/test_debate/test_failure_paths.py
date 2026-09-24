@@ -54,7 +54,14 @@ class _CallCountingLLMClient:
         if round_num in self.fail_round_for.get(persona_name, set()):
             raise RuntimeError(f"persona {persona_name} fails on round {round_num}")
 
-        return {"content": _persona_payload(), "tokens": 10, "cost_usd": 0.001}
+        # A disagrees with B and C so the opening round has no consensus and
+        # deliberation continues into round 2.
+        label = "unsafe" if persona_name == "A" else "safe"
+        return {
+            "content": _persona_payload(label=label),
+            "tokens": 10,
+            "cost_usd": 0.001,
+        }
 
 
 class _SummariserFailureClient:
@@ -104,10 +111,8 @@ class CascadeFailureTests(unittest.IsolatedAsyncioTestCase):
         engine = DebateEngine(
             personas=self.personas,
             llm_client=llm,
-            # Force max_rounds=2 with diverging round-1 labels so deliberation
-            # continues into round 2 without hitting consensus early. We achieve
-            # divergence not via labels (this client returns "safe" for all) but
-            # by running max_rounds with consensus disabled via persona count > 1.
+            # The client gives A a different label from B and C, so the
+            # opening round has no consensus and deliberation reaches round 2.
             config=DebateConfig(mode=DebateMode.DELIBERATION, max_rounds=2),
         )
 
@@ -284,12 +289,13 @@ class MalformedPersonaJSONTests(unittest.IsolatedAsyncioTestCase):
         )
         self.labels = ["safe", "unsafe"]
 
-    def test_missing_label_falls_back_to_first_label(self) -> None:
+    def test_missing_label_is_marked_failed(self) -> None:
         raw = json.dumps({"confidence": 0.7, "reasoning": "r", "key_factors": []})
         response = self.engine._parse_persona_response(raw, "A", self.labels)
-        # Missing label → "unknown" placeholder (engine.py:471 default).
-        self.assertEqual(response.label, "unknown")
-        self.assertAlmostEqual(response.confidence, 0.7)
+        # A missing label is not a vote for any label.
+        self.assertTrue(response.failed)
+        self.assertEqual(response.confidence, 0.0)
+        self.assertEqual(response.raw_response, raw)
 
     def test_confidence_above_one_is_clamped(self) -> None:
         raw = json.dumps({"label": "safe", "confidence": 1.5})
@@ -303,20 +309,20 @@ class MalformedPersonaJSONTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.label, "unsafe")
         self.assertEqual(response.confidence, 0.0)
 
-    def test_non_numeric_confidence_falls_back(self) -> None:
-        # "high" is not a number; clamp_confidence(float("high")) raises ValueError.
-        # Currently the parser does not catch this — pin the current behaviour so
-        # any future strict-mode flag is a deliberate change.
+    def test_non_numeric_confidence_is_marked_failed(self) -> None:
         raw = json.dumps({"label": "safe", "confidence": "high"})
-        with self.assertRaises(ValueError):
-            self.engine._parse_persona_response(raw, "A", self.labels)
+        response = self.engine._parse_persona_response(raw, "A", self.labels)
+        self.assertTrue(response.failed)
+        self.assertIn("confidence", response.reasoning)
 
-    def test_non_string_label_is_coerced(self) -> None:
-        # str(42) → "42" — pins that the parser does not validate label is in
-        # the labels list. Caller is expected to handle unknown labels.
+    def test_non_string_label_outside_labels_is_marked_failed(self) -> None:
         raw = json.dumps({"label": 42, "confidence": 0.5})
         response = self.engine._parse_persona_response(raw, "A", self.labels)
-        self.assertEqual(response.label, "42")
+        self.assertTrue(response.failed)
+        self.assertEqual(
+            response.reasoning,
+            "Persona returned label '42', which is not one of the configured labels.",
+        )
 
     def test_array_payload_falls_back(self) -> None:
         # safe_json_parse returns None for non-dict payloads, triggering the

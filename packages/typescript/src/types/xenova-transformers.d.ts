@@ -3,5 +3,5 @@ declare module "@xenova/transformers" {
     task: string,
     modelName: string,
     options?: Record<string, unknown>,
-  ): Promise<(text: string) => unknown>;
+  ): Promise<(text: string, options?: Record<string, unknown>) => unknown>;
 }

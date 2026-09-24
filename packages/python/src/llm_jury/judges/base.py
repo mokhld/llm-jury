@@ -36,6 +36,10 @@ class Verdict:
     library_version: str = field(default_factory=lambda: __version__)
     created_at: str = field(default_factory=_utc_now_iso)
 
+    # Structured audit data from the judge. LLMJudge stores
+    # key_agreements, key_disagreements and decisive_factor here.
+    judge_details: dict | None = None
+
     @property
     def debate_degraded(self) -> bool:
         """True when at least one persona failed during the debate.

@@ -12,10 +12,12 @@ export class FunctionClassifier implements Classifier {
 
   async classify(text: string): Promise<ClassificationResult> {
     const [label, confidence] = await this.fn(text);
+    // A local function makes no paid call, so its cost is a known zero.
     return {
       label,
       confidence,
       rawOutput: { label, confidence },
+      costUsd: 0,
     };
   }
 

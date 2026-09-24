@@ -35,6 +35,10 @@ class CachingLLMClient:
     Caches at non-zero temperature too. If you need fresh stochastic
     samples per call, don't wrap — the cache has no knowledge of
     whether a model is deterministic at the chosen temperature.
+
+    A cache hit costs nothing, so hits return a copy of the stored payload
+    with ``cost_usd`` set to 0.0 and ``cached`` set to True. Debate and
+    verdict totals therefore count only calls that reached the provider.
     """
 
     def __init__(
@@ -74,7 +78,7 @@ class CachingLLMClient:
             ):
                 self._cache.move_to_end(key)
                 self.hits += 1
-                return value
+                return {**value, "cost_usd": 0.0, "cached": True}
             del self._cache[key]
 
         value = await self._inner.complete(
@@ -85,7 +89,9 @@ class CachingLLMClient:
             response_format,
         )
         self.misses += 1
-        self._cache[key] = (time.monotonic(), value)
+        # Store a copy so callers mutating the returned payload cannot
+        # change what later hits see.
+        self._cache[key] = (time.monotonic(), dict(value))
         if len(self._cache) > self._max_size:
             self._cache.popitem(last=False)
         return value

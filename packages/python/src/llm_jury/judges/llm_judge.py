@@ -1,11 +1,32 @@
 from __future__ import annotations
 
+import logging
+
 from llm_jury._defaults import DEFAULT_MODEL
 from llm_jury.debate.engine import DebateTranscript
 from llm_jury.llm.client import LiteLLMClient, LLMClient
-from llm_jury.utils import clamp_confidence, safe_json_parse, strip_markdown_fences
+from llm_jury.personas.schema import build_judge_response_schema
+from llm_jury.utils import (
+    add_costs,
+    format_confidence,
+    match_label,
+    parse_confidence,
+    payload_cost,
+    safe_json_parse,
+    strip_markdown_fences,
+    wrap_untrusted,
+)
 
 from .base import JudgeStrategy, Verdict, _fallback_verdict, _usable_responses
+from .majority_vote import _majority_vote
+
+logger = logging.getLogger(__name__)
+
+
+def _as_str_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
 
 
 class LLMJudge(JudgeStrategy):
@@ -54,50 +75,135 @@ class LLMJudge(JudgeStrategy):
             )
 
         prompt = self._build_prompt(transcript, labels)
-        payload = await self.llm_client.complete(
-            model=self.model,
-            system_prompt=self.system_prompt,
-            prompt=prompt,
-            temperature=self.temperature,
-        )
-        raw_content = str(payload.get("content", "{}"))
+        try:
+            payload = await self.llm_client.complete(
+                model=self.model,
+                system_prompt=self.system_prompt,
+                prompt=prompt,
+                temperature=self.temperature,
+                response_format=build_judge_response_schema(labels),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # A judge outage must not throw away the paid debate: decide by
+            # vote instead.
+            logger.warning(
+                "LLM judge call failed; falling back to a majority vote: %s", exc
+            )
+            return self._vote_fallback(
+                transcript,
+                "llm_judge_fallback_error",
+                f"LLM judge call failed ({type(exc).__name__}: {exc}).",
+                judge_cost_usd=None,
+            )
+
+        judge_cost = payload_cost(payload)
+        raw_content = str(payload.get("content") or "")
         data = safe_json_parse(strip_markdown_fences(raw_content))
 
         if data is None:
-            return Verdict(
-                label=transcript.primary_result.label,
-                confidence=transcript.primary_result.confidence,
-                reasoning="LLM judge response was not valid JSON. Falling back to primary result.",
-                was_escalated=True,
-                primary_result=transcript.primary_result,
-                debate_transcript=transcript,
-                judge_strategy="llm_judge_fallback_invalid_json",
-                total_duration_ms=0,  # Jury fills in the full-classify duration.
-                total_cost_usd=(transcript.total_cost_usd or 0.0)
-                + float(payload.get("cost_usd", 0.0) or 0.0),
+            return self._vote_fallback(
+                transcript,
+                "llm_judge_fallback_invalid_json",
+                "LLM judge response was not valid JSON.",
+                judge_cost,
             )
 
+        raw_label = data.get("label")
+        label = match_label(raw_label, labels)
+        if label is None:
+            return self._vote_fallback(
+                transcript,
+                "llm_judge_fallback_invalid_label",
+                f"LLM judge returned label '{raw_label}', which is not one of the "
+                "configured labels.",
+                judge_cost,
+            )
+
+        raw_confidence = data.get("confidence")
+        confidence = parse_confidence(raw_confidence)
+        if confidence is None:
+            return self._vote_fallback(
+                transcript,
+                "llm_judge_fallback_invalid_confidence",
+                f"LLM judge returned confidence '{raw_confidence}', which is not a "
+                "finite number.",
+                judge_cost,
+            )
+
+        decisive_factor = data.get("decisive_factor")
         return Verdict(
-            label=str(data.get("label", transcript.primary_result.label)),
-            confidence=clamp_confidence(
-                data.get("confidence", transcript.primary_result.confidence)
-            ),
+            label=label,
+            confidence=confidence,
             reasoning=str(data.get("reasoning", "LLM judge response.")),
             was_escalated=True,
             primary_result=transcript.primary_result,
             debate_transcript=transcript,
             judge_strategy="llm_judge",
             total_duration_ms=0,  # Jury fills in the full-classify duration.
-            total_cost_usd=(transcript.total_cost_usd or 0.0)
-            + float(payload.get("cost_usd", 0.0) or 0.0),
+            total_cost_usd=add_costs(transcript.total_cost_usd, judge_cost),
+            judge_details={
+                "key_agreements": _as_str_list(data.get("key_agreements")),
+                "key_disagreements": _as_str_list(data.get("key_disagreements")),
+                "decisive_factor": (
+                    str(decisive_factor) if decisive_factor is not None else None
+                ),
+            },
+        )
+
+    def _vote_fallback(
+        self,
+        transcript: DebateTranscript,
+        strategy_name: str,
+        reason: str,
+        judge_cost_usd: float | None,
+    ) -> Verdict:
+        """Majority vote over the final round's valid responses, without an LLM.
+
+        Used when the judge's own output is unusable. Falls back to the
+        primary classifier result when the final round has no valid votes.
+        """
+        total_cost = add_costs(transcript.total_cost_usd, judge_cost_usd)
+        final_round = (
+            _usable_responses(transcript.rounds[-1]) if transcript.rounds else []
+        )
+        if not final_round:
+            verdict = _fallback_verdict(
+                transcript,
+                strategy_name,
+                f"{reason} No valid persona responses in the final round; "
+                "returning primary classifier result.",
+            )
+            verdict.total_cost_usd = total_cost
+            return verdict
+
+        winner, confidence, vote_reasoning = _majority_vote(final_round)
+        return Verdict(
+            label=winner,
+            confidence=confidence,
+            reasoning=(
+                f"{reason} Falling back to a majority vote over the final "
+                f"round's persona responses. {vote_reasoning}"
+            ),
+            was_escalated=True,
+            primary_result=transcript.primary_result,
+            debate_transcript=transcript,
+            judge_strategy=strategy_name,
+            total_duration_ms=0,  # Jury fills in the full-classify duration.
+            total_cost_usd=total_cost,
         )
 
     def _build_prompt(self, transcript, labels: list[str]) -> str:
         lines = [
-            f"Input: {transcript.input_text}",
+            f"Input:\n{wrap_untrusted(transcript.input_text)}",
             f"Available labels: {', '.join(labels)}",
-            f"Primary result: {transcript.primary_result.label} ({transcript.primary_result.confidence:.2f})",
+            f"Primary result: {transcript.primary_result.label} ({format_confidence(transcript.primary_result.confidence)})",
         ]
+
+        persona_biases = getattr(transcript, "persona_biases", None) or {}
+        if persona_biases:
+            lines.append("\nExpert roster:")
+            for name, bias in persona_biases.items():
+                lines.append(f"- {name} (known bias: {bias})")
 
         for round_idx, round_responses in enumerate(transcript.rounds):
             valid = _usable_responses(round_responses)

@@ -64,7 +64,7 @@ INFERRED means read from code or docs but not executed. Reproduction scripts use
 LLM clients (no network).
 
 ### A1. BUG-01 Verdict labels are never validated against the configured labels
-- Severity: critical. Status: in progress.
+- Severity: critical. Status: fixed (2026-09-24, PR #23).
 - Where: `judges/llm_judge.py:81` / `judges/llmJudge.ts:100` (default judge, no
   `response_format`, accepts any string); persona parse `debate/engine.py:579` /
   `engine.ts:560`; `classifiers/llm_classifier.py:59` / `llmClassifier.ts:62`.
@@ -82,7 +82,7 @@ LLM clients (no network).
   falls back to a vote over valid responses (`llm_judge_fallback_invalid_label`).
 
 ### A2. BUG-02 Non-numeric or NaN confidence skips escalation
-- Severity: high. Status: in progress.
+- Severity: high. Status: fixed (2026-09-24, PR #23).
 - Where: TS `llmClassifier.ts:63`, `engine.ts:561`, `llmJudge.ts:101` use bare
   `Number(...)`; `jury/core.ts:253` escalates on `confidence < threshold`, which is false
   for NaN. Python `utils.clamp_confidence` turns NaN into 1.0 and raises on `"low"`.
@@ -97,7 +97,7 @@ LLM clients (no network).
   escalates non-finite confidences; validate `confidence_threshold` in [0, 1].
 
 ### A3. BUG-04 Cost reporting and the cost cap are unreliable
-- Severity: high. Status: in progress.
+- Severity: high. Status: fixed (2026-09-24, PR #23).
 - Where: unknown per-call cost is coerced to 0 (`engine.py:378, 424`, `engine.ts:147` and
   others). The TS `LiteLLMClient` never reports cost (`llm/client.ts:151-155`). The
   pre-flight estimate (`jury/core.py:72-79`, `core.ts:84-90`) counts persona calls only,
@@ -119,7 +119,7 @@ LLM clients (no network).
   to escalated totals; compare with a small tolerance. Pricing for TS is FEAT-04.
 
 ### A4. BUG-03 A judge failure throws away the paid debate
-- Severity: high. Status: in progress.
+- Severity: high. Status: fixed (2026-09-24, PR #23).
 - Where: `jury/core.py` calls `self.judge.judge(...)` with no handling; `LLMJudge.judge`
   lets the LLM exception escape (`llm_judge.py:57`, `llmJudge.ts:79`, `core.ts:193`).
 - Evidence (VERIFIED, both SDKs): a judge 400/503 after 7 paid debate calls rejected
@@ -130,7 +130,7 @@ LLM clients (no network).
   (`llm_judge_fallback_error`), then to the primary result.
 
 ### A5. CAL-01 Calibration produces meaningless thresholds
-- Severity: high. Status: in progress (CLI-01 fix; FEAT-01 rewrites calibration).
+- Severity: high. Status: in progress. CLI-01 (ground-truth leak) fixed in PR #23; the TS calibrator and jury measurement are FEAT-01.
 - Where and evidence (VERIFIED):
   - CLI `function` classifier falls back to the ground-truth `label` when
     `predicted_label` is missing (`cli/main.py:105`, `cli/main.ts:135`). `llm-jury
@@ -149,7 +149,7 @@ LLM clients (no network).
   exclude escalations in TS; measure the jury (FEAT-01).
 
 ### A6. CLI-02 The npm-installed TypeScript CLI does nothing and exits 0
-- Severity: high (critical for anyone running the TS CLI in a pipeline). Status: in progress.
+- Severity: high (critical for anyone running the TS CLI in a pipeline). Status: fixed (2026-09-24, PR #23).
 - Where: `packages/typescript/src/cli/main.ts:316` runs `main()` only when
   `import.meta.url === "file://" + process.argv[1]`. npm installs bins as symlinks.
 - Evidence (VERIFIED): running `dist/cli/main.js` through a symlink printed nothing;
@@ -163,7 +163,7 @@ LLM clients (no network).
   of the packed tarball (CI-01).
 
 ### A7. BUG-09 Untrusted input is pasted into prompts without delimiters
-- Severity: high for content-moderation users. Status: in progress.
+- Severity: high for content-moderation users. Status: fixed (2026-09-24, PR #23).
 - Where: `debate/engine.py:441` (`## Input to Classify\n\n{text}`), the deliberation and
   summariser prompts, `llm_judge.py:97`, `llm_classifier.py:38`, and the TS equivalents.
 - Evidence (VERIFIED by reading; impact INFERRED): the input sits inside the same
@@ -180,14 +180,14 @@ LLM clients (no network).
 |---|---|---|---|---|
 | REL-01 | high | `release.yml:97-115` commits to main and force-pushes the tag before tests run, also on `dry_run`; re-running moves an existing tag. v0.2.0 was published to PyPI from `8809991` and to npm from `02e63be`. Release tests skip tsc and lint and CI status. | VERIFIED (workflow read, `gh run` history) | open |
 | DOC-01 | high | Root README Overview says the Python package is `llm-jury`; that name on PyPI is an unrelated project that ships the same `llm_jury` import package. | VERIFIED | open |
-| AD-01 | high | TS `HuggingFaceClassifier` calls the pipeline without top-k options and freezes `labels` from the first call's single top result, so debates run over one allowed label. No `labels` option (Python has one). | VERIFIED with injected pipeline; library default INFERRED | in progress |
-| BUG-05 | medium | `on_verdict` / `onVerdict` fires only on judged verdicts, not fast path or cost-guard verdicts (most traffic). | VERIFIED both SDKs | in progress |
-| BUG-06 | medium | Consensus and `early_stop_min_confidence` are checked only after rounds 2+, so at default `max_rounds=2` early stop never saves a call; a unanimous opening round still pays for round 2 and the summariser. | VERIFIED both SDKs | in progress |
-| BUG-07 | medium | Fail-fast `classify_batch` keeps starting debates after it rejects (TS: 0 calls at rejection, 12 calls 50 ms later). | VERIFIED TS, INFERRED Python | in progress |
-| BUG-08 | medium | Python `LiteLLMClient` has no timeout (litellm default `request_timeout=6000` s) and takes no constructor args, so README's `LiteLLMClient(api_key=...)` raises TypeError. TS retries 4xx errors whose body contains 5xx-looking numbers; neither SDK honours Retry-After; TS default client gets no logger; `openai/gpt-5-mini` style names still get a temperature. | VERIFIED (timeout value, TypeError, regex); prefix INFERRED | in progress |
-| BUG-10 | medium | `Persona.known_bias` never reaches any prompt although the judge is told to weigh it; LLM judge's `key_agreements`, `key_disagreements`, `decisive_factor` are requested and discarded. | VERIFIED | in progress |
-| AD-02 | medium | Python HF and sklearn adapters run blocking inference inside `async def`, stalling the event loop. | INFERRED from code | in progress |
-| AD-03 | medium | Sklearn adapters map `predict_proba` columns to `labels` by position, ignoring `classes_` order. | INFERRED from code | in progress |
+| AD-01 | high | TS `HuggingFaceClassifier` calls the pipeline without top-k options and freezes `labels` from the first call's single top result, so debates run over one allowed label. No `labels` option (Python has one). | VERIFIED with injected pipeline; library default INFERRED | fixed (2026-09-24, PR #23) |
+| BUG-05 | medium | `on_verdict` / `onVerdict` fires only on judged verdicts, not fast path or cost-guard verdicts (most traffic). | VERIFIED both SDKs | fixed (2026-09-24, PR #23) |
+| BUG-06 | medium | Consensus and `early_stop_min_confidence` are checked only after rounds 2+, so at default `max_rounds=2` early stop never saves a call; a unanimous opening round still pays for round 2 and the summariser. | VERIFIED both SDKs | fixed (2026-09-24, PR #23) |
+| BUG-07 | medium | Fail-fast `classify_batch` keeps starting debates after it rejects (TS: 0 calls at rejection, 12 calls 50 ms later). | VERIFIED TS, INFERRED Python | fixed (2026-09-24, PR #23) |
+| BUG-08 | medium | Python `LiteLLMClient` has no timeout (litellm default `request_timeout=6000` s) and takes no constructor args, so README's `LiteLLMClient(api_key=...)` raises TypeError. TS retries 4xx errors whose body contains 5xx-looking numbers; neither SDK honours Retry-After; TS default client gets no logger; `openai/gpt-5-mini` style names still get a temperature. | VERIFIED (timeout value, TypeError, regex); prefix INFERRED | fixed (2026-09-24, PR #23) |
+| BUG-10 | medium | `Persona.known_bias` never reaches any prompt although the judge is told to weigh it; LLM judge's `key_agreements`, `key_disagreements`, `decisive_factor` are requested and discarded. | VERIFIED | fixed (2026-09-24, PR #23) |
+| AD-02 | medium | Python HF and sklearn adapters run blocking inference inside `async def`, stalling the event loop. | INFERRED from code | fixed (2026-09-24, PR #23) |
+| AD-03 | medium | Sklearn adapters map `predict_proba` columns to `labels` by position, ignoring `classes_` order. | INFERRED from code | fixed (2026-09-24, PR #23) |
 | DOC-02 | medium | README snippets that fail: `DebateMode.Independent` (real key `INDEPENDENT`; in plain JS it silently runs deliberation and makes the pre-flight estimate NaN); `LiteLLMClient(api_key=...)`; TS error strings in troubleshooting tables; "failed personas are dropped" (they stay with `failed=True`); cost docs claim `undefined`/`None` where code returns 0. | VERIFIED | open |
 | DOC-03 | medium | Missing `AUDIT.md` cited in README, CONTRIBUTING, SECURITY; SECURITY.md supports only 0.1.x; CHANGELOG has two `### Changed` headings and stale compare links; CONTRIBUTING cites `examples/python/` (does not exist) and a `uv sync` flow that lacks pytest. | VERIFIED | open |
 | PKG-01 | medium | No LICENSE in wheel, sdist or npm tarball; package READMEs link `../../LICENSE`; no `engines` field; `exports` has no `require`/`default` condition. | VERIFIED | open |
@@ -246,3 +246,30 @@ Covered lightly or not at all:
   two personas compare equal).
 - Windows, Node versions other than 22 and 24, Python 3.14 beyond one wheel test run.
 - Memory growth of `CachingLLMClient` under large prompts (size-bounded by count, not bytes).
+
+## Fix log
+
+### 2026-09-24, PR #23 (`fix/review-findings`)
+
+Fixed BUG-01 to BUG-10, CLI-01 to CLI-05 and AD-01 to AD-04 in both SDKs, each with
+tests that fail on the old code. Python suite 139 -> 286 tests, TypeScript 116 -> 235.
+The spec the fix agents shared defines the names and semantics; the user-visible changes
+are in CHANGELOG `[Unreleased]`.
+
+Behaviour changes users will notice:
+- `estimated_max_debate_cost_usd` now counts the summariser and LLM judge (default setup
+  goes from 6 to 8 calls), so an existing `max_debate_cost_usd` can now trip at pre-flight.
+- Unknown cost is `None`/`null` instead of 0; `DebateTranscript.unpriced_calls` marks a
+  lower-bound total.
+- A unanimous opening round ends a deliberation debate (no round 2, no summary).
+- `llm_judge_fallback_invalid_json` now returns a majority vote instead of the primary
+  result.
+- The CLI `function` classifier requires `predicted_label` and `predicted_confidence`.
+
+Known parity differences left in place:
+- A persona reply that cannot be parsed keeps the placeholder label `unknown` in TS and
+  `labels[0]` in Python (a pinned TS test). Neither carries a vote.
+- TS `Verdict.judgeDetails` uses camelCase keys (`keyAgreements`) like the rest of TS
+  `toDict()`; the TS CLI converts them to snake_case.
+- The TS `LiteLLMClient` still never reports cost; pricing is FEAT-04 (reading LiteLLM's
+  `x-litellm-response-cost` header is an easy first step).

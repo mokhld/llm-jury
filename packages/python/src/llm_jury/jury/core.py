@@ -8,11 +8,31 @@ from dataclasses import dataclass
 from typing import Literal, overload
 
 from llm_jury.classifiers.base import ClassificationResult, Classifier
-from llm_jury.debate.engine import DebateConfig, DebateEngine
+from llm_jury.debate.engine import (
+    DebateConfig,
+    DebateEngine,
+    DebateMode,
+    exceeds_cost_cap,
+    guard_spend,
+)
 from llm_jury.judges.base import JudgeStrategy, Verdict
 from llm_jury.judges.llm_judge import LLMJudge
 from llm_jury.llm.client import LiteLLMClient, LLMClient
 from llm_jury.personas.base import Persona
+from llm_jury.utils import add_costs, is_finite_number
+
+
+def _escalated_total_cost(
+    primary_cost_usd: float | None, debate_cost_usd: float | None
+) -> float | None:
+    """Total cost of an escalated verdict: primary call plus debate (and judge).
+
+    Either part being unknown makes the total unknown. Summing only the known
+    part would report a debate whose calls were all unpriced as free.
+    """
+    if primary_cost_usd is None or debate_cost_usd is None:
+        return None
+    return primary_cost_usd + debate_cost_usd
 
 
 @dataclass(slots=True)
@@ -48,6 +68,13 @@ class Jury:
         llm_client: LLMClient | None = None,
         debate_concurrency: int = 5,
     ) -> None:
+        if not is_finite_number(confidence_threshold) or not (
+            0.0 <= confidence_threshold <= 1.0
+        ):
+            raise ValueError(
+                "confidence_threshold must be a finite number in [0, 1], "
+                f"got {confidence_threshold!r}"
+            )
         self.classifier = classifier
         self.personas = personas
         self.threshold = confidence_threshold
@@ -62,6 +89,9 @@ class Jury:
         )
         self.escalation_override = escalation_override
         self.max_debate_cost_usd = max_debate_cost_usd
+        # Estimated cost of one LLM call (persona, summariser or judge). Used
+        # for the pre-flight estimate and, by the cost guard, for every call
+        # whose client reported no cost.
         self.estimated_cost_per_persona_usd = max(0.0, estimated_cost_per_persona_usd)
         self.on_escalation = on_escalation
         self.on_cost_estimate = on_cost_estimate
@@ -71,12 +101,26 @@ class Jury:
 
     @property
     def estimated_max_debate_cost_usd(self) -> float:
-        """Heuristic upper-bound estimate of a single debate's cost."""
-        return (
-            len(self.personas)
-            * max(1, self.debate_config.max_rounds)
-            * self.estimated_cost_per_persona_usd
+        """Upper-bound estimate of one escalation's LLM spend.
+
+        Counts every call the debate and judge can make: each persona in
+        each round, the summariser (deliberation mode) and the judge (when it
+        is an ``LLMJudge``), priced at ``estimated_cost_per_persona_usd``.
+        """
+        deliberation = self.debate_config.mode == DebateMode.DELIBERATION
+        rounds = max(1, self.debate_config.max_rounds) if deliberation else 1
+        persona_calls = len(self.personas) * rounds
+        summariser_calls = 1 if deliberation else 0
+        judge_calls = 1 if isinstance(self.judge, LLMJudge) else 0
+        return self.estimated_cost_per_persona_usd * (
+            persona_calls + summariser_calls + judge_calls
         )
+
+    def _finish(self, verdict: Verdict) -> Verdict:
+        """Single exit for every verdict ``classify`` returns."""
+        if self.on_verdict is not None:
+            self.on_verdict(verdict)
+        return verdict
 
     async def classify(self, text: str) -> Verdict:
         start = time.perf_counter()
@@ -87,16 +131,18 @@ class Jury:
 
         if not should_escalate:
             self._stats.fast_path += 1
-            return Verdict(
-                label=primary.label,
-                confidence=primary.confidence,
-                reasoning="Classified by primary classifier with sufficient confidence.",
-                was_escalated=False,
-                primary_result=primary,
-                debate_transcript=None,
-                judge_strategy="primary_classifier",
-                total_duration_ms=int((time.perf_counter() - start) * 1000),
-                total_cost_usd=primary.cost_usd or 0.0,
+            return self._finish(
+                Verdict(
+                    label=primary.label,
+                    confidence=primary.confidence,
+                    reasoning="Classified by primary classifier with sufficient confidence.",
+                    was_escalated=False,
+                    primary_result=primary,
+                    debate_transcript=None,
+                    judge_strategy="primary_classifier",
+                    total_duration_ms=int((time.perf_counter() - start) * 1000),
+                    total_cost_usd=primary.cost_usd,
+                )
             )
 
         self._stats.escalated += 1
@@ -117,24 +163,25 @@ class Jury:
                     "for estimate %.4f USD",
                     self.estimated_max_debate_cost_usd,
                 )
-                return Verdict(
-                    label=primary.label,
-                    confidence=primary.confidence,
-                    reasoning=(
-                        "Debate skipped: on_cost_estimate callback returned "
-                        "False. Returning primary classifier result."
-                    ),
-                    was_escalated=True,
-                    primary_result=primary,
-                    debate_transcript=None,
-                    judge_strategy="cost_guard_user_override",
-                    total_duration_ms=int((time.perf_counter() - start) * 1000),
-                    total_cost_usd=primary.cost_usd or 0.0,
+                return self._finish(
+                    Verdict(
+                        label=primary.label,
+                        confidence=primary.confidence,
+                        reasoning=(
+                            "Debate skipped: on_cost_estimate callback returned "
+                            "False. Returning primary classifier result."
+                        ),
+                        was_escalated=True,
+                        primary_result=primary,
+                        debate_transcript=None,
+                        judge_strategy="cost_guard_user_override",
+                        total_duration_ms=int((time.perf_counter() - start) * 1000),
+                        total_cost_usd=add_costs(primary.cost_usd),
+                    )
                 )
 
-        if (
-            self.max_debate_cost_usd is not None
-            and self.estimated_max_debate_cost_usd > self.max_debate_cost_usd
+        if exceeds_cost_cap(
+            self.estimated_max_debate_cost_usd, self.max_debate_cost_usd
         ):
             self.logger.warning(
                 "[llm-jury] skipping debate: estimated cost %.4f USD exceeds "
@@ -142,21 +189,23 @@ class Jury:
                 self.estimated_max_debate_cost_usd,
                 self.max_debate_cost_usd,
             )
-            return Verdict(
-                label=primary.label,
-                confidence=primary.confidence,
-                reasoning=(
-                    "Debate skipped: estimated cost "
-                    f"({self.estimated_max_debate_cost_usd:.4f} USD) exceeds "
-                    f"max_debate_cost_usd ({self.max_debate_cost_usd:.4f} USD). "
-                    "Returning primary classifier result."
-                ),
-                was_escalated=True,
-                primary_result=primary,
-                debate_transcript=None,
-                judge_strategy="cost_guard_pre_flight",
-                total_duration_ms=int((time.perf_counter() - start) * 1000),
-                total_cost_usd=primary.cost_usd or 0.0,
+            return self._finish(
+                Verdict(
+                    label=primary.label,
+                    confidence=primary.confidence,
+                    reasoning=(
+                        "Debate skipped: estimated cost "
+                        f"({self.estimated_max_debate_cost_usd:.4f} USD) exceeds "
+                        f"max_debate_cost_usd ({self.max_debate_cost_usd:.4f} USD). "
+                        "Returning primary classifier result."
+                    ),
+                    was_escalated=True,
+                    primary_result=primary,
+                    debate_transcript=None,
+                    judge_strategy="cost_guard_pre_flight",
+                    total_duration_ms=int((time.perf_counter() - start) * 1000),
+                    total_cost_usd=add_costs(primary.cost_usd),
+                )
             )
 
         transcript = await self.debate_engine.debate(
@@ -164,14 +213,17 @@ class Jury:
             primary_result=primary,
             labels=self.classifier.labels,
             max_cost_usd=self.max_debate_cost_usd,
+            estimated_cost_per_call_usd=self.estimated_cost_per_persona_usd,
         )
 
-        if (
-            self.max_debate_cost_usd is not None
-            and transcript.total_cost_usd is not None
-        ):
-            if transcript.total_cost_usd > self.max_debate_cost_usd:
-                return Verdict(
+        debate_spend = guard_spend(
+            transcript.total_cost_usd,
+            transcript.unpriced_calls,
+            self.estimated_cost_per_persona_usd,
+        )
+        if exceeds_cost_cap(debate_spend, self.max_debate_cost_usd):
+            return self._finish(
+                Verdict(
                     label=primary.label,
                     confidence=primary.confidence,
                     reasoning=(
@@ -183,9 +235,12 @@ class Jury:
                     debate_transcript=transcript,
                     judge_strategy="cost_guard_primary_fallback",
                     total_duration_ms=int((time.perf_counter() - start) * 1000),
-                    total_cost_usd=transcript.total_cost_usd,
+                    total_cost_usd=_escalated_total_cost(
+                        primary.cost_usd, transcript.total_cost_usd
+                    ),
                     persona_failures=transcript.persona_failures,
                 )
+            )
 
         verdict = await self.judge.judge(transcript, self.classifier.labels)
 
@@ -209,13 +264,18 @@ class Jury:
             verdict.debate_transcript = transcript
         if not verdict.total_duration_ms:
             verdict.total_duration_ms = int((time.perf_counter() - start) * 1000)
-        if verdict.total_cost_usd is None:
-            verdict.total_cost_usd = transcript.total_cost_usd
+        # The judge reports debate + judge cost; the verdict total also
+        # includes the primary classifier call.
+        debate_and_judge_cost = (
+            verdict.total_cost_usd
+            if verdict.total_cost_usd is not None
+            else transcript.total_cost_usd
+        )
+        verdict.total_cost_usd = _escalated_total_cost(
+            primary.cost_usd, debate_and_judge_cost
+        )
 
-        if self.on_verdict:
-            self.on_verdict(verdict)
-
-        return verdict
+        return self._finish(verdict)
 
     @overload
     async def classify_batch(
@@ -243,27 +303,55 @@ class Jury:
         """Classify many texts concurrently.
 
         With ``return_exceptions=False`` (default) the first failing text
-        raises and the whole batch is lost, mirroring ``asyncio.gather``.
-        Pass ``return_exceptions=True`` to receive the exception object in
-        that text's slot instead, so one bad row cannot discard the verdicts
-        (and spend) of the rows that succeeded.
+        raises and the whole batch is lost. No new ``classify`` call starts
+        after that failure, and calls still queued or in flight are
+        cancelled, so a failed batch stops spending. Pass
+        ``return_exceptions=True`` to receive the exception object in that
+        text's slot instead, so one bad row cannot discard the verdicts (and
+        spend) of the rows that succeeded.
         """
         sem = asyncio.Semaphore(max(1, concurrency))
+        aborted = False
 
         async def _classify(text: str) -> Verdict:
+            nonlocal aborted
             async with sem:
-                return await self.classify(text)
+                if aborted:
+                    raise asyncio.CancelledError()
+                try:
+                    return await self.classify(text)
+                except BaseException:
+                    if not return_exceptions:
+                        aborted = True
+                    raise
 
-        return list(
-            await asyncio.gather(
-                *[_classify(text) for text in texts],
-                return_exceptions=return_exceptions,
+        if return_exceptions:
+            return list(
+                await asyncio.gather(
+                    *[_classify(text) for text in texts],
+                    return_exceptions=True,
+                )
             )
-        )
+
+        tasks = [asyncio.ensure_future(_classify(text)) for text in texts]
+        try:
+            return list(await asyncio.gather(*tasks))
+        except BaseException:
+            aborted = True
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            # Wait for the cancelled tasks to unwind so none outlives the call.
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     def _should_escalate(self, result: ClassificationResult) -> bool:
         if self.escalation_override is not None:
             return bool(self.escalation_override(result))
+        # A missing or non-finite confidence (None, NaN, inf) cannot vouch
+        # for the primary label, so it always escalates.
+        if not is_finite_number(result.confidence):
+            return True
         return result.confidence < self.threshold
 
     @property

@@ -84,5 +84,57 @@ class JuryBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(jury.stats.total, 2)
 
 
+class FailFastBatchTests(unittest.IsolatedAsyncioTestCase):
+    """BUG-07: once a fail-fast batch rejects, it stops spending."""
+
+    def _jury(self, started: list[str], finished: list[str]) -> Jury:
+        async def classify_fn(text: str):
+            started.append(text)
+            if text == "boom":
+                raise RuntimeError("classifier exploded")
+            await asyncio.sleep(0.05)
+            finished.append(text)
+            return ("safe", 0.95)
+
+        classifier = FunctionClassifier(classify_fn, ["safe", "unsafe"])
+        return Jury(classifier=classifier, personas=[], confidence_threshold=0.7)
+
+    async def test_no_new_classify_starts_after_a_failure(self) -> None:
+        started: list[str] = []
+        finished: list[str] = []
+        jury = self._jury(started, finished)
+
+        with self.assertRaises(RuntimeError):
+            await jury.classify_batch(["boom", "a", "b", "c"], concurrency=1)
+        # Give any leaked task time to run.
+        await asyncio.sleep(0.1)
+
+        self.assertEqual(started, ["boom"])
+
+    async def test_in_flight_calls_are_cancelled(self) -> None:
+        started: list[str] = []
+        finished: list[str] = []
+        jury = self._jury(started, finished)
+
+        with self.assertRaises(RuntimeError):
+            await jury.classify_batch(["slow", "boom", "a", "b", "c"], concurrency=2)
+        await asyncio.sleep(0.1)
+
+        self.assertEqual(started, ["slow", "boom"])
+        self.assertEqual(finished, [])
+
+    async def test_return_exceptions_still_runs_every_text(self) -> None:
+        started: list[str] = []
+        finished: list[str] = []
+        jury = self._jury(started, finished)
+
+        results = await jury.classify_batch(
+            ["boom", "a", "b"], concurrency=1, return_exceptions=True
+        )
+
+        self.assertIsInstance(results[0], RuntimeError)
+        self.assertEqual(sorted(finished), ["a", "b"])
+
+
 if __name__ == "__main__":
     unittest.main()
