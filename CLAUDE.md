@@ -96,10 +96,30 @@ Git: `main` has a required-review ruleset; self-authored PRs merge with
   `total_duration_ms=0` and Jury fills it in.
 - `judge_strategy` values are a public contract (README troubleshooting table lists them):
   `primary_classifier`, `majority_vote`, `weighted_vote`, `bayesian`, `llm_judge`,
-  `llm_judge_fallback_*`, `cost_guard_pre_flight`, `cost_guard_primary_fallback`,
+  `llm_judge_fallback_error` / `_invalid_json` / `_invalid_label` / `_invalid_confidence`
+  (majority vote over the final round), `llm_judge_fallback_personas_failed` (primary
+  result), `cost_guard_pre_flight`, `cost_guard_primary_fallback`,
   `cost_guard_user_override`.
-- `LiteLLMClient` omits `temperature` for reasoning models (`o1`, `o3`, `gpt-5` prefixes).
+- Labels from personas, `LLMClassifier` and `LLMJudge` go through `match_label` (exact,
+  then case-insensitive, canonical spelling); an out-of-set persona label is a failed
+  response. Model-supplied confidences go through `parse_confidence`; a non-finite
+  primary confidence escalates.
+- Cost: `None` / `null` means unknown and is never coerced to 0.
+  `DebateTranscript.unpriced_calls` counts calls without a reported cost; the cost cap
+  charges them at `estimated_cost_per_persona_usd` (really "per LLM call"). An escalated
+  `total_cost_usd` is None if the primary or the debate part is unknown, and a lower bound
+  when `unpriced_calls > 0`. Local classifiers (function, HF, sklearn) report 0.
+- Every prompt embeds the input through `wrap_untrusted` (`<input>` tags plus an
+  untrusted-data note). Keep that when adding prompts.
+- `on_verdict` fires once for every verdict, fast path included.
+- Deliberation stops after any round, including the opening one, when labels are
+  unanimous or `early_stop_min_confidence` is met; then there is no summary.
+- `LiteLLMClient` omits `temperature` for reasoning models (`o1`, `o3`, `gpt-5`, also
+  after a provider prefix such as `openai/`). Python default timeout is 60 s.
 - The TS `LiteLLMClient` does not compute cost; only custom clients report `costUsd`.
+- The TS npm bin is `dist/cli/bin.js` (always runs `main`); `src/cli/main.ts` also
+  self-runs when executed directly. New TS CLI flags must be registered in
+  `COMMAND_VALUE_OPTIONS` and `usageText()` because unknown options are rejected.
 - CLI defaults (`independent`, 1 round) differ from SDK defaults (`deliberation`, 2 rounds).
 - TS `Jury` logs nothing unless given a logger (`logger: console`).
 - TS sources import with `.ts` extensions and run under `--experimental-strip-types`
