@@ -9,7 +9,7 @@ from typing import Any
 class FakeLLMReply:
     content: str
     tokens: int = 10
-    cost_usd: float = 0.001
+    cost_usd: float | None = 0.001
 
 
 class FakeLLMClient:

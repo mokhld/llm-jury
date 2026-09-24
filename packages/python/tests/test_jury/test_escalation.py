@@ -17,6 +17,7 @@ class MockDebateEngine:
         primary_result: ClassificationResult,
         labels: list[str],
         max_cost_usd: float | None = None,
+        estimated_cost_per_call_usd: float | None = None,
     ) -> DebateTranscript:
         return DebateTranscript(
             input_text=text,

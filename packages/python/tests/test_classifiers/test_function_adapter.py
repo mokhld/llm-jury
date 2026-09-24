@@ -17,6 +17,8 @@ class FunctionClassifierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.label, "safe")
         self.assertEqual(result.confidence, 0.9)
         self.assertEqual(result.raw_output, {"label": "safe", "confidence": 0.9})
+        # A local function makes no paid call.
+        self.assertEqual(result.cost_usd, 0.0)
 
     async def test_batch_classification(self) -> None:
         classifier = FunctionClassifier(

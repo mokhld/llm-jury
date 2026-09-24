@@ -17,6 +17,7 @@ class ExpensiveDebateEngine:
         primary_result: ClassificationResult,
         labels: list[str],
         max_cost_usd: float | None = None,
+        estimated_cost_per_call_usd: float | None = None,
     ) -> DebateTranscript:
         return DebateTranscript(
             input_text=text,
@@ -100,7 +101,8 @@ class JuryControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verdict.label, "safe")
 
     async def test_pre_flight_estimate_skips_debate(self) -> None:
-        """If estimated cost (N×rounds×per_persona) > cap, debate must NOT run."""
+        """If estimated cost (every possible call × per-call estimate) > cap,
+        debate must NOT run."""
         classifier = FunctionClassifier(lambda _: ("safe", 0.3), ["safe", "unsafe"])
         personas = [
             Persona(name=f"P{i}", role="r", system_prompt="s") for i in range(4)
@@ -122,7 +124,8 @@ class JuryControlTests(unittest.IsolatedAsyncioTestCase):
         )
         jury.debate_engine = TrackingEngine()
 
-        # 4 personas × 2 rounds × $0.01 = $0.08 > $0.05 → pre-flight refusal
+        # (4 personas × 2 rounds + summariser) × $0.01 = $0.09 > $0.05
+        # → pre-flight refusal. MockJudge is not an LLMJudge, so no judge call.
         self.assertGreater(
             jury.estimated_max_debate_cost_usd, jury.max_debate_cost_usd or 0
         )
@@ -148,7 +151,7 @@ class JuryControlTests(unittest.IsolatedAsyncioTestCase):
         )
         jury.debate_engine = ExpensiveDebateEngine()
 
-        # 1 × 2 × 0.01 = 0.02, well under 10.0 → debate runs (but ExpensiveDebateEngine
+        # (1 × 2 + 1) × 0.01 = 0.03, well under 10.0 → debate runs (but ExpensiveDebateEngine
         # returns 1.25 total, still under 10.0 → judge runs)
         verdict = await jury.classify("text")
         self.assertEqual(verdict.judge_strategy, "mock")
@@ -227,8 +230,8 @@ class JuryControlTests(unittest.IsolatedAsyncioTestCase):
             personas=personas,
             estimated_cost_per_persona_usd=0.02,
         )
-        # 3 personas × 2 rounds (default) × 0.02 = 0.12
-        self.assertAlmostEqual(jury.estimated_max_debate_cost_usd, 0.12)
+        # (3 personas × 2 rounds + summariser + default LLMJudge) × 0.02 = 0.16
+        self.assertAlmostEqual(jury.estimated_max_debate_cost_usd, 0.16)
 
     async def test_on_cost_estimate_false_skips_debate(self) -> None:
         """F4: user callback returning False short-circuits the debate."""
@@ -316,7 +319,7 @@ class JuryControlTests(unittest.IsolatedAsyncioTestCase):
             on_cost_estimate=lambda _e, _t: False,
             judge=MockJudge(),
         )
-        # Without the callback this would be cost_guard_pre_flight (0.08 > 0.05).
+        # Without the callback this would be cost_guard_pre_flight (0.09 > 0.05).
         verdict = await jury.classify("text")
         self.assertEqual(verdict.judge_strategy, "cost_guard_user_override")
 

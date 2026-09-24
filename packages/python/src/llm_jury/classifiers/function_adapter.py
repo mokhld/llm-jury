@@ -25,8 +25,10 @@ class FunctionClassifier(Classifier):
         else:
             label, confidence = result
 
+        # A local function makes no paid call, so its cost is known to be zero.
         return ClassificationResult(
             label=label,
             confidence=float(confidence),
             raw_output={"label": label, "confidence": float(confidence)},
+            cost_usd=0.0,
         )

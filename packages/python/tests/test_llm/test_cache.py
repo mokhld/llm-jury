@@ -45,10 +45,40 @@ class CachingLLMClientTests(unittest.IsolatedAsyncioTestCase):
         a = await cache.complete("m", "sys", "p", 0.0, None)
         b = await cache.complete("m", "sys", "p", 0.0, None)
 
-        self.assertEqual(a, b)
+        self.assertEqual(a["content"], b["content"])
+        self.assertEqual(a["tokens"], b["tokens"])
         self.assertEqual(inner.calls, 1)
         self.assertEqual(cache.hits, 1)
         self.assertEqual(cache.misses, 1)
+
+    async def test_hit_is_free_and_marked_cached(self) -> None:
+        inner = _CountingClient()
+        cache = CachingLLMClient(inner)
+
+        miss = await cache.complete("m", "sys", "p", 0.0, None)
+        hit = await cache.complete("m", "sys", "p", 0.0, None)
+
+        self.assertEqual(miss["cost_usd"], 0.001)
+        self.assertNotIn("cached", miss)
+        self.assertEqual(hit["cost_usd"], 0.0)
+        self.assertIs(hit["cached"], True)
+        self.assertEqual(hit["content"], miss["content"])
+
+    async def test_hit_does_not_mutate_stored_entry(self) -> None:
+        inner = _CountingClient()
+        cache = CachingLLMClient(inner)
+
+        miss = await cache.complete("m", "sys", "p", 0.0, None)
+        miss["content"] = "mutated by caller"
+        first_hit = await cache.complete("m", "sys", "p", 0.0, None)
+        first_hit["content"] = "mutated again"
+        second_hit = await cache.complete("m", "sys", "p", 0.0, None)
+
+        self.assertNotEqual(second_hit["content"], "mutated by caller")
+        self.assertNotEqual(second_hit["content"], "mutated again")
+        stored = next(iter(cache._cache.values()))[1]
+        self.assertEqual(stored["cost_usd"], 0.001)
+        self.assertNotIn("cached", stored)
 
     async def test_different_keys_are_distinct(self) -> None:
         inner = _CountingClient()

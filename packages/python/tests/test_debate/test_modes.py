@@ -119,8 +119,10 @@ class DebateModeTests(unittest.IsolatedAsyncioTestCase):
 
         transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
 
-        self.assertEqual(len(transcript.rounds), 2)
-        self.assertIsNotNone(transcript.summary)
+        # Unanimous opening round: no deliberation rounds, no summariser.
+        self.assertEqual(len(transcript.rounds), 1)
+        self.assertIsNone(transcript.summary)
+        self.assertEqual(len(llm.calls), 3)
 
     async def test_one_persona_failure_does_not_crash_independent_mode(self) -> None:
         llm = _FlakyLLMClient(fail_for={"B"})
@@ -231,9 +233,10 @@ class DebateModeTests(unittest.IsolatedAsyncioTestCase):
 
         transcript = await engine.debate("text", self.primary, ["safe", "unsafe"])
 
-        # Round 0 (initial opinions) always runs; F7 short-circuits at
-        # the consensus check after round 1 — so 2 rounds, not 5.
-        self.assertEqual(len(transcript.rounds), 2)
+        # The opening round always runs; F7 short-circuits at the consensus
+        # check right after it, so 1 round (and no summariser), not 5.
+        self.assertEqual(len(transcript.rounds), 1)
+        self.assertIsNone(transcript.summary)
 
     async def test_f7_does_not_early_stop_when_one_persona_below_threshold(
         self,
