@@ -398,11 +398,43 @@ All classifiers implement `classify(text)` and expose `labels`.
 - **LLMJudge**: `LLMJudge(model="gpt-5-mini", system_prompt=None, temperature=0.0, llm_client=None)`. Reads every round, the summary and each persona's `known_bias`, and answers with a label-enum JSON schema. On success `judge_strategy` is `llm_judge` and `verdict.judge_details` holds `key_agreements`, `key_disagreements` and `decisive_factor`. When its call fails or its output is unusable, it returns a majority vote over the final round (`llm_judge_fallback_error`, `llm_judge_fallback_invalid_json`, `llm_judge_fallback_invalid_label`, `llm_judge_fallback_invalid_confidence`), or the primary result if that round has no valid responses. When every persona failed it skips its call and returns the primary result (`llm_judge_fallback_personas_failed`).
 - **BayesianJudge**: `BayesianJudge(persona_priors=None)`. Uses persona priors/reliability maps if provided.
 
+### Evaluating the jury
+
+`JuryEvaluator` measures whether the jury beats your primary classifier on your own labelled data, and what that costs:
+
+```python
+from llm_jury import JuryEvaluator
+
+report = await JuryEvaluator(jury).evaluate(
+    texts, labels,
+    band_upper=0.95,       # debate every item whose primary confidence is below this
+    max_escalations=200,   # raise TooManyEscalationsError before any debate if more would run
+    concurrency=5,
+)
+report.summary()           # accuracy, flips_helped / flips_hurt, debate cost, latency, confusion
+report.threshold_sweep()   # per threshold: escalation_rate, system_accuracy, jury_accuracy, total_cost
+report.best_threshold(error_cost=10.0)
+```
+
+The primary classifier runs once per text. Items below `band_upper` go to `jury.escalate(text, primary)`, which runs the same cost gates, debate, judge and callbacks as the escalated branch of `classify`; the jury's own threshold is ignored and `jury.stats` is not touched.
+
+- `summary()` keys: `n`, `band_upper`, `primary_accuracy`, `debated`, `jury_accuracy_on_debated`, `primary_accuracy_on_debated`, `flips_helped` (primary wrong, jury right), `flips_hurt` (primary right, jury wrong), `debate_cost_usd`, `unpriced_calls`, `mean_debate_cost_usd`, `latency_ms_p50`, `latency_ms_p95`, `degraded`, `fallbacks`, `confusion` (`primary` over all items, `jury` over debated items).
+- `threshold_sweep(thresholds=None, error_cost=10.0, escalation_cost=None)`: at threshold t, items below t take the jury's label and the rest keep the primary label; `total_cost = errors * error_cost + escalations * escalation_cost`. `escalation_cost=None` uses the measured mean debate cost (0.05 when no call was priced). Thresholds above `band_upper` raise `ValueError`.
+- `best_threshold(error_cost=10.0, escalation_cost=None, thresholds=None)`: lowest `total_cost`, the lowest threshold wins a tie.
+- `items` (one `EvaluationItem` per text) and `to_dict()`.
+
+Unknown cost stays `None` and is never counted as 0: a debate whose calls reported no cost has `jury_cost_usd=None` and adds to `unpriced_calls`. An item's debate cost is the verdict total minus the primary cost, so a custom classifier should set `cost_usd` (0.0 for local models) for debate costs to be known. `examples/evaluate_jury.py` runs offline with a stub LLM client.
+
 ### Threshold Calibration
 
-`ThresholdCalibrator(jury)` then `await calibrate(texts, labels, error_cost=10.0, escalation_cost=0.05, thresholds=None)`.
+`ThresholdCalibrator(jury)` then `await calibrate(texts, labels, error_cost=10.0, escalation_cost=None, thresholds=None, use_jury=False)`.
 
-Report: `calibration_report()` returns rows with threshold, accuracy, escalation rate, and total cost. `calibrate(...)` mutates `jury.threshold` to the best threshold.
+Each text is classified once. An item escalates at threshold t when its confidence is below t or not finite, as in `Jury`.
+
+- `use_jury=False` (default) never runs the jury: each escalation costs `escalation_cost` (default 0.05) and counts as neither right nor wrong, so `accuracy` is the primary accuracy on the items it keeps.
+- `use_jury=True` runs `JuryEvaluator` with `band_upper` set to the highest threshold and picks the threshold from the measured sweep. `escalation_cost` defaults to the measured mean debate cost, rows also carry `system_accuracy` and `jury_accuracy`, and the evaluation is kept on `calibrator.evaluation_report`.
+
+Report: `calibration_report()` returns `best_threshold`, `use_jury` and rows with threshold, accuracy, escalation rate, and total cost (plus `summary` after a jury calibration). `calibrate(...)` mutates `jury.threshold` to the best threshold.
 
 ### LLM Transport (`LiteLLMClient`)
 
@@ -514,14 +546,33 @@ llm-jury classify \
   --threshold 0.7 \
   --labels safe,unsafe
 
-# Calibrate threshold from labelled data
+# Calibrate threshold from labelled data (never runs the jury)
 llm-jury calibrate \
   --input calibration.jsonl \
   --classifier function \
+  --labels safe,unsafe
+
+# Calibrate on measured jury outcomes (makes LLM calls)
+llm-jury calibrate \
+  --input calibration.jsonl \
+  --use-jury \
   --personas content_moderation \
   --judge majority \
   --labels safe,unsafe
+
+# Measure the jury against the primary classifier
+llm-jury eval \
+  --input calibration.jsonl \
+  --personas content_moderation \
+  --judge majority \
+  --labels safe,unsafe \
+  --max-escalations 200 \
+  --output report.json
 ```
+
+`calibrate` options: `--error-cost` (default 10), `--escalation-cost` (default 0.05, or the measured mean debate cost with `--use-jury`), `--initial-threshold` (default 0.7), `--use-jury`. Without `--use-jury` the jury options have no effect, and `calibrate` says so on stderr when you pass any.
+
+`eval` options: `--output` (full report with per-row results, as JSON), `--band-upper` (default 0.95), `--max-escalations`, `--thresholds` (comma-separated, each at most `--band-upper`), `--error-cost` (default 10), `--escalation-cost` (default: measured mean debate cost), `--concurrency` (default 5), plus the classifier, persona, judge and debate options of `classify`. It prints one JSON line with `best_threshold`, `summary` and `sweep`.
 
 Input JSONL format for `classify`:
 ```json
@@ -530,7 +581,7 @@ Input JSONL format for `classify`:
 
 With `--classifier function` (the default) the CLI replays the stored predictions, so every row needs `text`, `predicted_label` and `predicted_confidence` (0 to 1); the ground-truth `label` field is never read as a prediction. Bad usage exits with code 2 before any LLM call: rows without predictions, out-of-range option values, or an unknown `--debate-mode`. `classify` writes a `{"text", "error"}` row for each input that failed and exits with code 1 only when every row failed.
 
-Input JSONL format for `calibrate` (requires ground-truth `label`):
+Input JSONL format for `calibrate` and `eval` (requires ground-truth `label`):
 ```json
 {"text": "some text", "label": "safe", "predicted_label": "safe", "predicted_confidence": 0.95}
 ```

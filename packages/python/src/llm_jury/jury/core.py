@@ -146,6 +146,31 @@ class Jury:
             )
 
         self._stats.escalated += 1
+        return await self._escalate(text, primary, start)
+
+    async def escalate(self, text: str, primary: ClassificationResult) -> Verdict:
+        """Run the escalation branch for a primary result you already have.
+
+        Skips the primary classifier and the threshold check, then does what
+        ``classify`` does for an escalated item: fires ``on_escalation``,
+        applies the ``on_cost_estimate`` gate and the cost guards, runs the
+        debate and the judge, and fires ``on_verdict``. It does not update
+        ``stats``. ``total_duration_ms`` counts from this call, so it leaves
+        out the primary classifier's time. ``classify`` runs the same code for
+        every item it escalates.
+
+        Raises ``ValueError`` when the jury has no personas, because there is
+        no one to debate.
+        """
+        if not self.personas:
+            raise ValueError(
+                "Jury.escalate needs at least one persona; this jury has none."
+            )
+        return await self._escalate(text, primary, time.perf_counter())
+
+    async def _escalate(
+        self, text: str, primary: ClassificationResult, start: float
+    ) -> Verdict:
         if self.on_escalation:
             self.on_escalation(text, primary)
 
