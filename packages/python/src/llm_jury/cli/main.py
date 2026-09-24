@@ -6,7 +6,6 @@ import math
 from pathlib import Path
 
 import typer
-from click.core import ParameterSource
 
 from llm_jury._defaults import DEFAULT_MODEL
 from llm_jury.calibration.optimizer import ThresholdCalibrator
@@ -398,10 +397,12 @@ _JURY_OPTIONS = (
 
 def _given_jury_options(ctx: typer.Context) -> list[str]:
     """Jury options the user set on the command line."""
+    # Compare by member name: newer typer releases bundle their own click, so
+    # its ParameterSource enum is not the one in the standalone click package.
     return [
         flag
         for name, flag in _JURY_OPTIONS
-        if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
+        if getattr(ctx.get_parameter_source(name), "name", None) == "COMMANDLINE"
     ]
 
 
