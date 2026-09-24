@@ -683,17 +683,86 @@ Behavior notes:
 
 Uses persona priors/reliability maps if provided.
 
+### Evaluating the jury
+
+`JuryEvaluator` measures whether the jury beats your primary classifier on your own
+labelled data, and what that costs. It classifies every text once, debates every item
+whose primary confidence is below `band_upper` (default 0.95), and reports the primary
+and jury labels side by side.
+
+- Python: `report = await JuryEvaluator(jury).evaluate(texts, labels, band_upper=0.95, max_escalations=None, concurrency=5)`
+- TypeScript: `const report = await new JuryEvaluator(jury).evaluate({ texts, labels, bandUpper: 0.95, maxEscalations, concurrency: 5 })`
+
+`max_escalations` / `maxEscalations` guards spend: when more items fall below
+`band_upper`, `TooManyEscalationsError` is raised after the primary pass and before any
+debate. The jury's own threshold and `escalation_override` are ignored, and `jury.stats`
+is not touched. Each debate goes through `jury.escalate(text, primary)`, a public `Jury`
+method that runs the same cost gates, debate, judge and callbacks as the escalated
+branch of `classify`, for a primary result you already have.
+
+What the report gives you:
+
+- `summary()`: `n`, `band_upper`, `primary_accuracy`, `debated`,
+  `jury_accuracy_on_debated`, `primary_accuracy_on_debated`, `flips_helped` (primary
+  wrong, jury right), `flips_hurt` (primary right, jury wrong), `debate_cost_usd`,
+  `unpriced_calls`, `mean_debate_cost_usd`, `latency_ms_p50`, `latency_ms_p95`
+  (nearest-rank, per debated item), `degraded`, `fallbacks` (counts of fallback and
+  cost-guard judge strategies) and `confusion` (`primary` over all items, `jury` over
+  debated items, as `{expected: {predicted: count}}`). TypeScript uses camelCase keys.
+- `threshold_sweep(thresholds=None, error_cost=10.0, escalation_cost=None)` /
+  `thresholdSweep({ thresholds, errorCost, escalationCost })`: one row per threshold
+  with `threshold`, `escalation_rate`, `system_accuracy`, `jury_accuracy`,
+  `primary_accuracy`, `errors` and `total_cost`. At threshold t, items below t take the
+  jury's label and the rest keep the primary label;
+  `total_cost = errors * error_cost + escalations * escalation_cost`. Leaving
+  `escalation_cost` unset uses the measured mean debate cost, or 0.05 when no call was
+  priced. A threshold above `band_upper` raises, because those items were never debated.
+- `best_threshold(error_cost=10.0, escalation_cost=None, thresholds=None)` /
+  `bestThreshold({ ... })`: the threshold with the lowest `total_cost` (the lowest one
+  wins a tie).
+- `items`: per text, the primary label, confidence, correctness and cost and, when
+  debated, the jury's label, confidence, correctness, judge strategy, cost, duration,
+  `unpriced_calls` and whether it was degraded.
+- `to_dict()` / `toDict()`: `band_upper`, `summary` and `items`, with snake_case keys
+  in both SDKs.
+
+Unknown cost stays unknown. A debate whose calls reported no cost has a `None` / `null`
+cost and adds to `unpriced_calls`; `debate_cost_usd` sums the known costs only and is
+`None` / `null` when there are none. An item's debate cost is the verdict total minus
+the primary cost, so it is also unknown when a custom classifier leaves `cost_usd`
+unset (the built-in local classifiers report 0). The TypeScript `LiteLLMClient` never
+reports cost, so TS debate costs are `null` unless your `llmClient` fills `costUsd`.
+
+`examples/evaluate_jury.py` and `examples/typescript/evaluate_jury.ts` run the
+evaluator offline with a stub LLM client.
+
 ### Threshold Calibration
 
-- Python: `ThresholdCalibrator(jury)` then `await calibrate(texts, labels, error_cost=10.0, escalation_cost=0.05, thresholds=None)`
-- TypeScript: `new ThresholdCalibrator(jury)` then `await calibrate({ texts, labels, errorCost=10, escalationCost=0.05, thresholds? })`
+- Python: `ThresholdCalibrator(jury)` then `await calibrate(texts, labels, error_cost=10.0, escalation_cost=None, thresholds=None, use_jury=False)`
+- TypeScript: `new ThresholdCalibrator(jury)` then `await calibrate({ texts, labels, errorCost=10, escalationCost?, thresholds?, useJury=false })`
+
+Both classify each text once and pick the threshold with the lowest
+`errors * error_cost + escalations * escalation_cost`. An item escalates at threshold t
+when its confidence is below t or is not a finite number, the same rule `Jury` uses.
+
+- Default mode never runs the jury. Each escalation costs `escalation_cost` (default
+  0.05) and counts as neither right nor wrong, so `accuracy` is the primary
+  classifier's accuracy on the items it keeps. This mode is cheap but assumes nothing
+  about whether the jury helps.
+- `use_jury=True` / `useJury: true` runs `JuryEvaluator` with `band_upper` set to the
+  highest candidate threshold (one debate per item below it) and picks the threshold
+  from the measured sweep, so a jury that gets items wrong pulls the threshold down.
+  `escalation_cost` then defaults to the measured mean debate cost. The evaluation is
+  kept on `calibrator.evaluation_report` / `calibrator.evaluationReport`.
 
 Report:
 
 - Python: `calibration_report()`
 - TypeScript: `calibrationReport()`
 
-Both return rows with threshold, accuracy, escalation rate, and total cost.
+Both return the best threshold, whether the jury was used, and rows with threshold,
+accuracy, escalation rate and total cost. After a jury calibration the rows also carry
+`system_accuracy` and `jury_accuracy`, and the report adds the evaluation `summary`.
 `calibrate(...)` mutates `jury.threshold` to the best threshold.
 
 Default threshold candidates when not provided:
@@ -781,6 +850,7 @@ Both packages install an `llm-jury` command: `pip install llm-jury-classifier`, 
 
 - `llm-jury classify`
 - `llm-jury calibrate`
+- `llm-jury eval`
 
 ### Common CLI options
 
@@ -814,8 +884,27 @@ Both packages install an `llm-jury` command: `pip install llm-jury-classifier`, 
 
 - `--input` (required, must include ground-truth `label` per row)
 - `--error-cost` default `10.0`
-- `--escalation-cost` default `0.05`
+- `--escalation-cost` default `0.05`, or the measured mean debate cost with `--use-jury`
 - `--initial-threshold` default `0.7`
+- `--use-jury` runs the jury on every row below the highest threshold and calibrates on
+  its measured outcomes (this makes LLM calls). Without it the jury options above have
+  no effect, and `calibrate` says so on stderr when you pass any of them.
+
+### Eval-only options
+
+`llm-jury eval` measures the jury against the primary classifier and prints one JSON
+line with `best_threshold`, `summary` and `sweep` (see
+[Evaluating the jury](#evaluating-the-jury)). It takes the same input as `calibrate`.
+
+- `--input` (required, must include ground-truth `label` per row)
+- `--output` also writes the full report, with per-row results, to a JSON file
+- `--band-upper` default `0.95`: debate every row whose primary confidence is below it
+- `--max-escalations` stops before any debate when more rows would be debated
+- `--thresholds` comma-separated, each at most `--band-upper` (default
+  `0.5,0.55,...,0.95` up to `--band-upper`)
+- `--error-cost` default `10.0`
+- `--escalation-cost` default: the measured mean debate cost
+- `--concurrency` default `5`: rows classified or debated at once
 
 ## License
 

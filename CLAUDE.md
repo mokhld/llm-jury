@@ -30,8 +30,9 @@ packages/python/src/llm_jury/        source of truth
   personas/            Persona, PersonaResponse, registry (4 built-in sets), schema (JSON schema)
   llm/client.py        LLMClient protocol, LiteLLMClient (litellm + tenacity retry)
   llm/cache.py         CachingLLMClient (opt-in LRU)
-  calibration/         ThresholdCalibrator
-  cli/main.py          typer app: `llm-jury classify|calibrate` (JSONL in/out)
+  calibration/         ThresholdCalibrator (cheap mode, or use_jury via JuryEvaluator)
+  evaluation/          JuryEvaluator, EvaluationReport: measured jury vs primary, sweeps
+  cli/main.py          typer app: `llm-jury classify|calibrate|eval` (JSONL in/out)
   utils.py, _defaults.py (DEFAULT_MODEL), _version.py
 packages/typescript/src/             same layout, camelCase file names
   logger.ts (NOOP_LOGGER default), defaults.ts, _version.ts (LIBRARY_VERSION)
@@ -48,10 +49,11 @@ product spec is `../llm-jury-spec.md`, outside the repo.
 
 Request flow (`Jury.classify`): primary `classifier.classify` -> `_should_escalate`
 (confidence < threshold, or `escalation_override`; empty `personas` disables escalation)
--> fast-path Verdict (`judge_strategy="primary_classifier"`), or: `on_escalation` ->
-`on_cost_estimate` gate -> pre-flight cost guard -> `DebateEngine.debate` -> mid-flight
-cost guard -> `judge.judge` -> Jury sets `was_escalated` / `persona_failures` and
-backfills unset fields -> `on_verdict`.
+-> fast-path Verdict (`judge_strategy="primary_classifier"`), or the escalation branch
+(also public as `Jury.escalate(text, primary)`, which skips the classifier, threshold and
+stats): `on_escalation` -> `on_cost_estimate` gate -> pre-flight cost guard ->
+`DebateEngine.debate` -> mid-flight cost guard -> `judge.judge` -> Jury sets
+`was_escalated` / `persona_failures` and backfills unset fields -> `on_verdict`.
 
 ## Commands
 

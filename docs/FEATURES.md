@@ -32,7 +32,7 @@ the brief, and note the deviation in the "Shipped:" line.
 
 | ID | Feature | Effort | Depends on | Status |
 |---|---|---|---|---|
-| FEAT-01 | Jury evaluation harness and outcome-aware calibration | medium-large | BUG-01..04, CLI-01 | in progress |
+| FEAT-01 | Jury evaluation harness and outcome-aware calibration | medium-large | BUG-01..04, CLI-01 | done (2026-09-24) |
 | FEAT-02 | Human-review routing policy | small | BUG-01, BUG-03 | open |
 | FEAT-03 | Score distributions, margin routing, better LLMClassifier confidence | medium | FEAT-01 (to measure it) | open |
 | FEAT-04 | Budgets that bind: TS pricing, auto cost estimate, per-debate time budget | medium | BUG-04, BUG-08 | open |
@@ -47,7 +47,23 @@ BUG/CLI IDs refer to `REVIEW.md` Part A; check their status there before startin
 
 ## FEAT-01: Jury evaluation harness and outcome-aware calibration
 
-Status: in progress
+Status: done (2026-09-24)
+
+Shipped: `JuryEvaluator` / `EvaluationReport` / `EvaluationItem`, `Jury.escalate`,
+`calibrate(use_jury=...)`, CLI `eval` and `calibrate --use-jury`, and offline examples,
+in both SDKs with a shared fixture. Deviations: the spend guard raises
+`TooManyEscalationsError` (a `ValueError`, TS `RangeError`) so the CLI can tell it apart;
+`Jury.escalate` raises when the jury has no personas; an item's debate cost is the
+verdict total minus the primary cost, so it is unknown when the primary reports no cost;
+`summary()` also carries `band_upper` and items also carry primary cost, `jury_degraded`
+and `unpriced_calls`; `best_threshold` also takes `thresholds`; `eval` also takes
+`--concurrency` (default 5); calibrator `escalation_cost` defaults to None (0.05 without
+the jury, the measured mean with it), non-finite confidences escalate there as in `Jury`,
+and `calibration_report()` adds `use_jury` (and `summary` in jury mode); the calibrate
+stderr note fires only when a jury flag was passed; both CLI `main` functions take an
+optional LLM client so tests run offline. Deferred: README public-export and example
+lists (left to the parallel docs change); re-measuring DOC-04 latency and cost needs
+live runs.
 
 **Problem.** Nobody can show that the jury beats their primary classifier on their data.
 `ThresholdCalibrator` never runs the jury: it treats every escalation as a fixed cost with

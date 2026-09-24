@@ -130,7 +130,7 @@ LLM clients (no network).
   (`llm_judge_fallback_error`), then to the primary result.
 
 ### A5. CAL-01 Calibration produces meaningless thresholds
-- Severity: high. Status: in progress. CLI-01 (ground-truth leak) fixed in PR #23; the TS calibrator and jury measurement are FEAT-01.
+- Severity: high. Status: fixed (2026-09-24). CLI-01 (ground-truth leak) fixed in PR #23; the TS calibrator (classify once, escalations out of `accuracy`) and jury measurement (`JuryEvaluator`, `calibrate(use_jury=True)`, CLI `eval` and `calibrate --use-jury`) shipped with FEAT-01.
 - Where and evidence (VERIFIED):
   - CLI `function` classifier falls back to the ground-truth `label` when
     `predicted_label` is missing (`cli/main.py:105`, `cli/main.ts:135`). `llm-jury
@@ -202,7 +202,7 @@ Agent-ready briefs with API sketches and acceptance criteria are in
 
 | Rank | ID | Feature | Serves | Effort | Status |
 |---|---|---|---|---|---|
-| 1 | FEAT-01 | Jury evaluation harness, and calibration that uses measured jury outcomes | Promise 1 made measurable; the threshold reflects real jury value | medium-large | in progress |
+| 1 | FEAT-01 | Jury evaluation harness, and calibration that uses measured jury outcomes | Promise 1 made measurable; the threshold reflects real jury value | medium-large | done (2026-09-24) |
 | 2 | FEAT-02 | Human-review routing policy (`needs_review`, `review_reasons`, typed resolution) | The core user story: resolve what is safe, route the rest | small | open |
 | 3 | FEAT-03 | Better routing signal: score distributions, top-2 margin routing, structured and logprob-based LLMClassifier confidence | Escalating the right items (paper uses margin routing) | medium | open |
 | 4 | FEAT-04 | Budgets that bind: TS token pricing, auto per-call estimate, per-debate time budget | Cost and latency promises in TS and for unpriced models | medium | open |

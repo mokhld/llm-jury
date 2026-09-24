@@ -34,6 +34,28 @@ marked **[py]** or **[ts]**.
   22.12+. The package is still ES modules only.
 - README section "Prompt injection and untrusted input": what the SDK does
   with untrusted text and what callers should still do.
+- `JuryEvaluator(jury).evaluate(texts, labels, band_upper=0.95,
+  max_escalations=None, concurrency=5)` (TS `evaluate({ texts, labels,
+  bandUpper, maxEscalations, concurrency })`) measures the jury on labelled
+  data. It classifies each text once, debates the items below `band_upper` and
+  returns an `EvaluationReport` with `summary()` (accuracy, flips helped and
+  hurt, known debate cost, unpriced calls, latency percentiles, fallbacks,
+  confusion matrices), `threshold_sweep()`, `best_threshold()`, `items` and
+  `to_dict()`. `max_escalations` raises `TooManyEscalationsError` before any
+  debate starts.
+- `Jury.escalate(text, primary)` / `jury.escalate(text, primary)` runs the
+  escalation branch (callbacks, cost gates, debate, judge) for a primary
+  result you already have. `classify` uses the same code for escalated items.
+- `ThresholdCalibrator.calibrate(..., use_jury=True)` / `useJury: true` picks
+  the threshold from measured jury outcomes. Rows then also carry
+  `system_accuracy` and `jury_accuracy`, and the report adds the evaluation
+  `summary`.
+- CLI `llm-jury eval` (flags: `--band-upper`, `--max-escalations`,
+  `--thresholds`, `--error-cost`, `--escalation-cost`, `--concurrency`,
+  `--output`) and `llm-jury calibrate --use-jury`, so the jury flags take
+  effect during calibration.
+- Offline examples `examples/evaluate_jury.py` and
+  `examples/typescript/evaluate_jury.ts`.
 
 ### Changed
 - `LLMClassifier` and `LLMJudge` send strict JSON-schema `response_format`
@@ -75,6 +97,18 @@ marked **[py]** or **[ts]**.
   and type-check on the bumped tree before pushing anything, pushes nothing
   on a dry run, and never moves or force-pushes an existing tag. CI installs
   the built wheel and npm tarball and runs the installed `llm-jury` command.
+- **[ts]** `ThresholdCalibrator` classifies each text once instead of once per
+  threshold, and leaves escalated items out of `accuracy` instead of counting
+  them as correct, so both SDKs report the same rows.
+- `ThresholdCalibrator` treats a non-finite confidence as escalated at every
+  threshold, the same rule `Jury` routes by (it was counted as a kept primary
+  label). `calibration_report()` / `calibrationReport()` adds `use_jury` /
+  `useJury`, and `escalation_cost` / `escalationCost` defaults to `None` /
+  unset, meaning 0.05 without the jury.
+- CLI `calibrate` prints a note on stderr when jury options are passed without
+  `--use-jury`, since they have no effect there. The Python and TS CLI `main`
+  accept an LLM client (`main(argv, llm_client=...)`,
+  `main(argv, { llmClient })`) that replaces the default for every call.
 
 ### Security
 - Every prompt wraps the input in `<input>` tags with a note that it is
