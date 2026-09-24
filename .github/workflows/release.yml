@@ -1,5 +1,21 @@
 name: Release
 
+# gh workflow run release.yml -f version=X.Y.Z -f target=all|pypi|npm -f dry_run=false
+#
+# 1. prepare: check out main, bump the version files, run the Python and
+#    TypeScript checks on the bumped tree, then commit the bump and tag it
+#    vX.Y.Z. Both are pushed together only after the checks pass, and never
+#    on a dry run. A dry run pushes nothing and publishes nothing.
+# 2. publish-pypi / publish-npm: build that exact commit and publish it
+#    through OIDC trusted publishing.
+# 3. github-release: create the GitHub release unless it already exists.
+#
+# Tags are never moved or force-pushed. If vX.Y.Z already exists on the
+# remote at another commit, prepare fails before anything is published. If
+# it already points at the release commit (a re-run after a failed publish),
+# the run continues without pushing. The registries reject a version that is
+# already published, so re-run with `target` set to the one that failed.
+
 on:
   workflow_dispatch:
     inputs:
@@ -17,7 +33,7 @@ on:
           - pypi
           - npm
       dry_run:
-        description: "Dry run — bump, tag, and test only (skip publish)"
+        description: "Dry run: bump and test only; push nothing, publish nothing"
         required: true
         default: false
         type: boolean
@@ -27,12 +43,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  bump-and-tag:
-    name: Bump versions and tag
+  prepare:
+    name: Bump, test and tag
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      TAG: v${{ inputs.version }}
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
     steps:
+      - name: Check the version input
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like 1.2.3, got '$VERSION'"
+            exit 1
+          fi
+
       - name: Checkout main
         uses: actions/checkout@v4
         with:
@@ -41,8 +69,6 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Bump versions
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
           # packages/python/pyproject.toml
           sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" packages/python/pyproject.toml
@@ -54,12 +80,14 @@ jobs:
           tmp=$(mktemp)
           jq --arg v "$VERSION" '.version = $v' packages/typescript/package.json > "$tmp" && mv "$tmp" packages/typescript/package.json
 
+          # package-lock.json (the workspace entry for packages/typescript)
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.packages["packages/typescript"].version = $v' package-lock.json > "$tmp" && mv "$tmp" package-lock.json
+
           # packages/typescript/src/_version.ts (stamped into Verdict.libraryVersion)
           sed -i "s/^export const LIBRARY_VERSION = \".*\";/export const LIBRARY_VERSION = \"${VERSION}\";/" packages/typescript/src/_version.ts
 
       - name: Validate all versions match
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
           python3 - <<'PY'
           import json, os, re
@@ -84,6 +112,11 @@ jobs:
           if ts["version"] != expected:
               errors.append(f"package.json (ts): expected {expected}, found {ts['version']}")
 
+          lock = json.loads(Path("package-lock.json").read_text())
+          lock_version = lock["packages"]["packages/typescript"]["version"]
+          if lock_version != expected:
+              errors.append(f"package-lock.json: expected {expected}, found {lock_version}")
+
           version_ts = Path("packages/typescript/src/_version.ts").read_text()
           m = re.search(r'^export const LIBRARY_VERSION = "(.+?)";', version_ts, re.MULTILINE)
           if not m or m.group(1) != expected:
@@ -94,81 +127,84 @@ jobs:
           print(f"All versions match: {expected}")
           PY
 
-      - name: Commit if needed
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add packages/python/pyproject.toml packages/python/src/llm_jury/_version.py \
-            packages/typescript/package.json packages/typescript/src/_version.ts
-          if ! git diff --cached --quiet; then
-            git commit -m "release: v${VERSION}"
-            git push origin main
-          fi
-
-      - name: Create and push tag
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          git tag -f "v${VERSION}"
-          git push origin "v${VERSION}" --force
-
-  test-python:
-    name: Test Python package
-    needs: bump-and-tag
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          ref: refs/tags/v${{ inputs.version }}
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install and test
+      - name: Test Python package
         working-directory: packages/python
         run: |
           pip install -e ".[dev]"
+          ruff check src tests
+          black --check src tests
           python -m pytest tests/ -v
-
-  test-typescript:
-    name: Test TypeScript package
-    needs: bump-and-tag
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          ref: refs/tags/v${{ inputs.version }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install and test
-        working-directory: packages/typescript
+      - name: Test TypeScript package
         run: |
-          npm install
+          npm ci
+          cd packages/typescript
+          npm run lint
+          npm run check
           npm test
+
+      - name: Commit the bump and check the tag
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/python/pyproject.toml packages/python/src/llm_jury/_version.py \
+            packages/typescript/package.json packages/typescript/src/_version.ts package-lock.json
+          if git diff --cached --quiet; then
+            echo "main already has version $VERSION; releasing it as it is."
+          else
+            git commit -m "release: $TAG"
+          fi
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+          # The commit the remote tag points at, empty when there is no tag.
+          # An annotated tag also has a peeled "^{}" line naming its commit.
+          remote=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+          tag_sha=$(awk -v ref="refs/tags/$TAG^{}" '$2 == ref { print $1 }' <<< "$remote")
+          if [ -z "$tag_sha" ]; then
+            tag_sha=$(awk -v ref="refs/tags/$TAG" '$2 == ref { print $1 }' <<< "$remote")
+          fi
+
+          if [ -z "$tag_sha" ]; then
+            git tag "$TAG"
+            echo "push=true" >> "$GITHUB_OUTPUT"
+            echo "Will tag $sha as $TAG."
+          elif [ "$tag_sha" = "$sha" ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG already points at $sha; continuing without pushing."
+          else
+            echo "::error::$TAG already exists at $tag_sha, but this release is $sha. Tags are never moved; release a new version instead."
+            exit 1
+          fi
+
+      - name: Push the release commit and tag
+        if: ${{ !inputs.dry_run && steps.commit.outputs.push == 'true' }}
+        run: git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
 
   publish-pypi:
     name: Publish to PyPI
-    needs: [test-python, test-typescript]
+    needs: prepare
     if: ${{ !inputs.dry_run && (inputs.target == 'all' || inputs.target == 'pypi') }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - name: Checkout tag
+      - name: Checkout the release commit
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/v${{ inputs.version }}
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -188,7 +224,7 @@ jobs:
 
   publish-npm:
     name: Publish to npm
-    needs: [test-python, test-typescript]
+    needs: prepare
     if: ${{ !inputs.dry_run && (inputs.target == 'all' || inputs.target == 'npm') }}
     runs-on: ubuntu-latest
     environment: npm
@@ -196,10 +232,10 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - name: Checkout tag
+      - name: Checkout the release commit
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/v${{ inputs.version }}
+          ref: ${{ needs.prepare.outputs.sha }}
 
       # Publishes via npm trusted publishing (OIDC): the @llm-jury/core
       # package on npmjs.com trusts this repo + workflow + the `npm`
@@ -221,21 +257,20 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [publish-pypi, publish-npm]
+    needs: [prepare, publish-pypi, publish-npm]
     if: ${{ !inputs.dry_run && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          ref: refs/tags/v${{ inputs.version }}
-
-      - name: Create release
+      - name: Create the release unless it exists
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: v${{ inputs.version }}
         run: |
-          gh release create "v${{ inputs.version }}" \
-            --title "v${{ inputs.version }}" \
-            --generate-notes
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do."
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --generate-notes --verify-tag
+          fi
