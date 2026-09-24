@@ -147,7 +147,7 @@ console.log(verdict.label, verdict.confidence, verdict.wasEscalated);
 
 ## Examples
 
-Runnable examples in `examples/` (require `OPENAI_API_KEY` except the calibration one):
+Runnable examples in `examples/` (require `OPENAI_API_KEY` except the calibration and evaluation ones):
 
 **Python** (`examples/*.py`):
 
@@ -156,6 +156,7 @@ python examples/content_moderation.py    # Content moderation with LLM classifie
 python examples/custom_personas.py       # Custom persona definitions + deliberation mode
 python examples/legal_compliance.py      # Legal compliance with sequential debate + weighted vote
 python examples/threshold_calibration.py # Threshold calibration (no API key needed)
+python examples/evaluate_jury.py         # Measure the jury against labelled data (no API key needed)
 ```
 
 **TypeScript** (`examples/typescript/*.ts`):
@@ -165,6 +166,7 @@ node --experimental-strip-types examples/typescript/content_moderation.ts
 node --experimental-strip-types examples/typescript/custom_personas.ts
 node --experimental-strip-types examples/typescript/legal_compliance.ts
 node --experimental-strip-types examples/typescript/threshold_calibration.ts
+node --experimental-strip-types examples/typescript/evaluate_jury.ts
 ```
 
 TS examples import from `@llm-jury/core`; to run from a fresh clone, install the local package first (`cd packages/typescript && npm install && npm link`, then `npm link @llm-jury/core` from the repo root) or copy the example into a project where the package is already installed.
@@ -516,6 +518,10 @@ from llm_jury import (
     DebateMode,
     DebateTranscript,
     Verdict,
+    ThresholdCalibrator,
+    JuryEvaluator,
+    EvaluationReport,
+    CachingLLMClient,
 )
 ```
 
@@ -537,6 +543,8 @@ import {
   LLMJudge,
   BayesianJudge,
   ThresholdCalibrator,
+  JuryEvaluator,
+  EvaluationReport,
   LiteLLMClient,
   CachingLLMClient,
 } from "@llm-jury/core";
