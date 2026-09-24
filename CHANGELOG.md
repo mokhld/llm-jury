@@ -11,6 +11,11 @@ marked **[py]** or **[ts]**.
 
 ## [Unreleased]
 
+### Fixed
+- **[ts]** The release job builds the package before `npm publish`, so npm
+  finds the `llm-jury` bin file when it validates the manifest instead of
+  warning that it removed the bin.
+
 ## [0.3.0] - 2026-09-24
 
 ### Added

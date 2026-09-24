@@ -6,7 +6,7 @@
   "author": "Mohammed Khalid (https://github.com/mokhld)",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mokhld/llm-jury.git",
+    "url": "git+https://github.com/mokhld/llm-jury.git",
     "directory": "packages/typescript"
   },
   "homepage": "https://github.com/mokhld/llm-jury",

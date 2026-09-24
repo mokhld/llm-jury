@@ -137,3 +137,17 @@ jobs:
           test "$actual" = "$expected"
           node --input-type=module -e "import { Jury } from '@llm-jury/core'; if (typeof Jury !== 'function') process.exit(1);"
           node -e "if (typeof require('@llm-jury/core').Jury !== 'function') process.exit(1);"
+      # The release publishes with npm@latest, which rewrites the manifest when
+      # it finds problems (for example it drops a bin whose file is missing).
+      # A dry run with the same npm must not report any correction.
+      - name: Dry-run publish with the npm the release uses
+        if: matrix.node-version == '22'
+        working-directory: packages/typescript
+        run: |
+          npm install -g npm@latest
+          npm run build
+          npm publish --dry-run --access public 2>&1 | tee "$RUNNER_TEMP/publish.log"
+          if grep -E "auto-corrected|No bin file found|was invalid and removed" "$RUNNER_TEMP/publish.log"; then
+            echo "::error::npm would rewrite package.json at publish time; run npm pkg fix and check the bin entry"
+            exit 1
+          fi
